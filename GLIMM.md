@@ -83,15 +83,26 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 
 ## Проверка
 
+Из `gpui-fast/`:
+
 ```sh
-cd gpui-fast
-export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-cargo test -p gpui -p gpui_apple --lib
+# macOS
+SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" cargo test -p gpui -p gpui_apple --lib
+# Linux
+cargo test -p gpui_wgpu --features test-support --lib fast::glimm -- --nocapture
+# Windows
+cargo test -p gpui_windows --features test-support --lib fast::glimm -- --nocapture
+# Общие тесты девяти сцен на каждой ОС
 cargo test -p gpui_perf --example glimm --features gpui_platform_fast/test-support
-cargo clippy -p gpui -p gpui_apple --lib -p gpui_perf --example glimm --features gpui_platform_fast/test-support -- -D warnings
 script/check-upstream
 git diff --check
 ```
+
+Нативные проверки выполняются в Tart, не в Docker/Wine: Ubuntu ARM64 + Vulkan/lavapipe и Windows 11 ARM64 + D3D11 WARP. Windows запускает x86_64 GNU-сборку через штатную x64-эмуляцию, а не ARM64-бинарник. Linux-кадры сняты в X11/Xvfb; Wayland-хук захвата проверен сборкой, но не отдельным compositor runtime.
+
+В общем Linux WGPU-наборе остаются четыре старых падения тестов растеризации path tiles на lavapipe. Они воспроизведены на чистом базовом коммите; все тесты Glimm проходят.
+
+Результаты, 62 OS-захвата, shader parity и точные границы проверки собраны в [GLIMM-PLATFORMS.md](GLIMM-PLATFORMS.md).
 
 ## Ограничения
 

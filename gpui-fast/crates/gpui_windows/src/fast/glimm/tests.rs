@@ -158,9 +158,9 @@ fn draw_into(
             MaxDepth: 1.,
             ..Default::default()
         }]));
-        context.VSSetConstantBuffers(0, Some(&[globals.global_params_buffer.clone()]));
-        context.PSSetConstantBuffers(0, Some(&[globals.global_params_buffer.clone()]));
-        context.VSSetConstantBuffers(1, Some(&[globals.batch_params_buffer.clone()]));
+        context.VSSetConstantBuffers(0, Some(std::slice::from_ref(&globals.global_params_buffer)));
+        context.PSSetConstantBuffers(0, Some(std::slice::from_ref(&globals.global_params_buffer)));
+        context.VSSetConstantBuffers(1, Some(std::slice::from_ref(&globals.batch_params_buffer)));
     }
     frame::draw_scene(&target, &mut renderer.pipelines, &mut renderer.frame, scene)?;
     unsafe {

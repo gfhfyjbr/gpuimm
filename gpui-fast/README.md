@@ -56,19 +56,20 @@ cargo run -p gpui_perf --example linux_webview
 ## Native Glimm effects (local addition)
 
 This checkout also ports the band and content-deformation effects from
-[glimm.dev's demos](https://glimm.dev/#demos) to native GPUI / Metal. It includes
-nine reference presets, configurable palettes and timing, async gather/release,
-old/new content compositing and an interactive playground. This addition is in
-this local checkout, not in the published crates listed below. The effect
-renderer currently supports Apple Metal only.
+[glimm.dev's demos](https://glimm.dev/#demos) to native GPUI on Metal (macOS),
+WGPU (Linux) and Direct3D 11 (Windows). It includes all nine original native
+scenes, element-local deformation, configurable palettes and timing, async
+gather/release and old/new content compositing. This addition is in this local
+checkout, not in the published crates listed below.
 
 ```sh
 SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
   cargo run -p gpui_perf --example glimm --features gpui_platform_fast/test-support
 ```
 
-See [Native Glimm transitions](docs/glimm.md) for the API, JSON settings,
-verification against the original GLSL, license and limitations.
+Omit the macOS-only `SDKROOT` assignment on Linux and Windows. See
+[Native Glimm transitions](docs/glimm.md) for the API, JSON settings,
+Tart runtime verification, original GLSL comparison, license and limitations.
 
 ## Using it
 

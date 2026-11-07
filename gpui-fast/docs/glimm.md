@@ -194,7 +194,18 @@ script/check-upstream
 
 Core fixtures evaluate the published JavaScript palettes and easing functions. GPU tests exercise actual content displacement, four-way old/new compositing, clipping, paint-order overlays, nested scopes, transparent content, cropped mipmap edges, texture release at idle, and a golden image rendered by the original WebGL shader.
 
-The workspace's `verify-glimm.mjs` runs that original GLSL in headless Chrome against the same textures and uniforms as Metal. For the checked 512 × 320 combined deformation/band fixture, mean absolute RGB error is 0.152/255 and maximum channel error is 2/255. This is a measured fixture, not a claim that every frame, font rasterizer or GPU backend is bit-identical. The original WebGL path has an additional 8-bit intermediate write; Metal also has different mipmap/filter rounding.
+The workspace's `verify-glimm.mjs` runs that original GLSL in headless Chrome against the same textures and uniforms as the shared backend tests. For the checked 512 × 320 combined deformation/band fixture:
+
+| Runtime | Mean absolute RGB error / 255 | Maximum channel error / 255 | Glimm GPU tests |
+| --- | ---: | ---: | ---: |
+| macOS / Metal | 0.152102 | 2 | 11 passed |
+| macOS / WGPU-Metal | 0.152100 | 2 | 13 passed |
+| Ubuntu ARM64 Tart / Vulkan-lavapipe | 0.209757 | 2 | 13 passed |
+| Windows 11 ARM64 Tart / D3D11 WARP | 0.162974 | 2 | 12 passed |
+
+Windows checks execute a cross-compiled x86_64 GNU executable under Windows ARM64's x64 emulation, not a native ARM64 binary. The WARP harness explicitly chooses the software adapter. Linux native-window captures use X11/Xvfb; the Wayland capture hook is compiled but has not been separately exercised in a Wayland compositor.
+
+These are measured fixtures, not a claim that every frame, font rasterizer or GPU backend is bit-identical. The original WebGL path has an additional 8-bit intermediate write; GPU mipmap/filter rounding also varies. The full Linux WGPU library suite has four existing path-tile rasterization failures on lavapipe, reproduced unchanged in a clean checkout of the base commit. All Glimm-specific tests pass; those unrelated failures are not hidden or relabeled as passes.
 
 ## Limits
 
