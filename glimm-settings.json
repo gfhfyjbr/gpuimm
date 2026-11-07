@@ -1,0 +1,13 @@
+{
+  "direction": "btt",
+  "sweepMs": 2200,
+  "gatherMs": 800,
+  "curve": 0.2,
+  "span": 0.72,
+  "intensity": 1.3,
+  "origin": [0.5, 1],
+  "originOffset": [0, -12],
+  "brightness": 1.15,
+  "swellAmount": 0.25,
+  "hueShift": 0.12
+}

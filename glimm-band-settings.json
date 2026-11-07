@@ -1,0 +1,13 @@
+{
+  "effect": "Band",
+  "direction": "ltr",
+  "easing": "ease",
+  "sweepMs": 1800,
+  "bandTight": 14,
+  "peakAlpha": 1,
+  "brightness": 1,
+  "swellAmount": 0.55,
+  "rippleAmount": 1,
+  "waveAmount": 0.7,
+  "feather": 16
+}
