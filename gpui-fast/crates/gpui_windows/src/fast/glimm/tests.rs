@@ -100,6 +100,8 @@ fn solid_green() -> (&'static str, &'static str) {
     )
 }
 fn follow(renderer: &mut Renderer, path: std::path::PathBuf) {
+    // `compose` resets a renderer whose device it has not seen yet, source included.
+    renderer.glimm.device = Some(renderer.device.clone());
     renderer.glimm.source = Some(gpui::GlimmShaderSource::following(Some(path), shader()));
 }
 

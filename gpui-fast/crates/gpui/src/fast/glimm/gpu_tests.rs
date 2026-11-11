@@ -352,7 +352,10 @@ fn glimm_gpu_follows_an_edited_shader_and_keeps_the_last_good_one() {
             .all(|(a, b)| (0..4).all(|i| a[i].abs_diff(b[i]) <= 1))
     };
     let (needle, green) = solid_green();
-    assert!(shader().contains(needle), "the shader no longer has {needle}");
+    assert!(
+        shader().contains(needle),
+        "the shader no longer has {needle}"
+    );
     let scene = parity_scene();
     let built_in = render(&mut renderer(), &scene);
 

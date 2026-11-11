@@ -69,7 +69,7 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 
 В коде: `controller.transition(...)` и `resolve_with(...)` не дают перепутать порядок «снять кадр → изменить состояние», `glimm_origin(...)` + `controller.marked_point()` дают точку действия по реальному положению элемента. Подробности — раздел «Development loop» в [`gpui-fast/docs/glimm.md`](gpui-fast/docs/glimm.md).
 
-Проверено на macOS (Metal) и тестами WGPU на macOS. HLSL-ветка отладочных видов и перезагрузка шейдера в Direct3D написаны по аналогии и на Windows не запускались.
+Проверено на macOS (Metal), тестами WGPU на macOS и в Windows-VM (Direct3D 11 WARP, 13 из 13 GPU-тестов, включая перезагрузку шейдера). На Linux новый тест не перезапускался.
 
 ## Сравнение с оригиналом
 

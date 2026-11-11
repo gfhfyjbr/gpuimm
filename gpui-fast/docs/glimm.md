@@ -240,10 +240,10 @@ The workspace's `verify-glimm.mjs` runs that original GLSL in headless Chrome ag
 
 | Runtime | Mean absolute RGB error / 255 | Maximum channel error / 255 | Glimm GPU tests |
 | --- | ---: | ---: | ---: |
-| macOS / Metal | 0.152102 | 2 | 11 passed |
-| macOS / WGPU-Metal | 0.152100 | 2 | 13 passed |
-| Ubuntu ARM64 Tart / Vulkan-lavapipe | 0.209757 | 2 | 13 passed |
-| Windows 11 ARM64 Tart / D3D11 WARP | 0.162974 | 2 | 12 passed |
+| macOS / Metal | 0.152102 | 2 | 12 passed |
+| macOS / WGPU-Metal | 0.152100 | 2 | 14 passed |
+| Ubuntu ARM64 Tart / Vulkan-lavapipe | 0.209757 | 2 | 13 passed (before the shader-following test was added; not rerun) |
+| Windows 11 ARM64 Tart / D3D11 WARP | 0.162974 | 2 | 13 passed |
 
 Windows checks execute a cross-compiled x86_64 GNU executable under Windows ARM64's x64 emulation, not a native ARM64 binary. The WARP harness explicitly chooses the software adapter. Linux native-window captures use X11/Xvfb; the Wayland capture hook is compiled but has not been separately exercised in a Wayland compositor.
 
@@ -256,4 +256,4 @@ These are measured fixtures, not a claim that every frame, font rasterizer or GP
 - Coverage is the band and content effects used by the nine demos at the supplied URL. React/Next adapters, DOM APIs, the package's separate experimental 3D mesh/NameDrop renderers and its component library are not part of this native port.
 - GPU-backed content already painted into a GPUI scene can be sampled. Separate OS-native child views, such as a platform WebView/video surface outside the scene, cannot be deformed by this shader.
 - Retain one controller per scope, and capture before committing state. Arbitrary application-specific transition queues are not implemented.
-- Active scopes use full-viewport raster scratch space plus scope-cropped old/current textures and per-run output textures. These are reused during animation and released when idle; many simultaneously active scopes can still use substantial GPU memory.
+- Active scopes use full-viewport raster scratch space plus scope-cropped old/current textures and per-run output textures. These are reused during animation and released when idle; many simultaneously active scopes can still use substantial GPU memory. The per-run output is viewport-sized whatever the scope's size, so a small scope in a large window costs a whole window's worth of pixels while it runs.
