@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 root="$(cd "$(dirname "$0")" && pwd)"
-cd "$root/gpui-fast"
+cd "$root"
 # Use the SDK belonging to the selected Xcode, not a newer incompatible CLT SDK.
 if [[ "$(uname -s)" == "Darwin" ]]; then
     export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
@@ -10,9 +10,9 @@ fi
 if [[ "${1:-}" == "--dev" ]]; then
     shift
     if [[ "$(uname -s)" == "Darwin" ]]; then
-        export GPUI_GLIMM_SHADER_DIR="${GPUI_GLIMM_SHADER_DIR:-$root/gpui-fast/crates/gpui_apple/src/fast}"
+        export GPUI_GLIMM_SHADER_DIR="${GPUI_GLIMM_SHADER_DIR:-$root/crates/gpui_apple/src/fast}"
     else
-        export GPUI_GLIMM_SHADER_DIR="${GPUI_GLIMM_SHADER_DIR:-$root/gpui-fast/crates/gpui_wgpu/src/fast}"
+        export GPUI_GLIMM_SHADER_DIR="${GPUI_GLIMM_SHADER_DIR:-$root/crates/gpui_wgpu/src/fast}"
     fi
     echo "following $GPUI_GLIMM_SHADER_DIR" >&2
 fi

@@ -3,7 +3,7 @@ set -euo pipefail
 sudo mkdir -p /workspace /host-cargo
 mountpoint -q /workspace || sudo mount -t virtiofs glimm /workspace
 mountpoint -q /host-cargo || sudo mount -t virtiofs glimm-cargo /host-cargo
-if [[ ! -f /workspace/gpui-fast/Cargo.toml && -f /workspace/workspace/gpui-fast/Cargo.toml ]]; then
+if [[ ! -f /workspace/Cargo.toml && -f /workspace/workspace/Cargo.toml ]]; then
   sudo mount --bind /workspace/workspace /workspace
 fi
 if [[ ! -d /host-cargo/registry && -d /host-cargo/cargo/registry ]]; then
@@ -33,7 +33,7 @@ for cache in registry git; do
     ln -s "/host-cargo/$cache" "$HOME/.cargo/$cache"
   fi
 done
-export CARGO_TARGET_DIR=/workspace/gpui-fast/target/glimm-linux
+export CARGO_TARGET_DIR=/workspace/target/glimm-linux
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_BUILD_JOBS=4
 export GLIMM_ARTIFACTS=/workspace
 export XDG_RUNTIME_DIR=/tmp/glimm-runtime
@@ -42,5 +42,5 @@ chmod 700 "$XDG_RUNTIME_DIR"
 uname -a
 rustc --version
 vulkaninfo --summary
-cd /workspace/gpui-fast
+cd /workspace
 cargo test -p gpui_wgpu --features test-support --lib -- --nocapture

@@ -7,11 +7,11 @@ if ($link -and $link.LinkType -eq 'Junction' -and $link.Target -contains $root) 
 } elseif ($link -and $link.LinkType) {
     throw 'Refusing to change an unexpected debug path link'
 }
-$source = "$root\gpui-fast\crates\gpui_windows\src"
-$destination = "$mirror\gpui-fast\crates\gpui_windows\src"
+$source = "$root\crates\gpui_windows\src"
+$destination = "$mirror\crates\gpui_windows\src"
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 Copy-Item "$source\*.hlsl" $destination -Force
-Get-ChildItem "$root\gpui-fast\target\glimm-windows\x86_64-pc-windows-gnu\debug\build\gpui_windows-*\out\*.hlsl" | ForEach-Object {
+Get-ChildItem "$root\target\glimm-windows\x86_64-pc-windows-gnu\debug\build\gpui_windows-*\out\*.hlsl" | ForEach-Object {
     $local = Join-Path $mirror $_.FullName.Substring($root.Length + 1)
     New-Item -ItemType Directory -Path (Split-Path $local) -Force | Out-Null
     Copy-Item $_.FullName $local -Force

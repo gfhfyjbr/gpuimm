@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { chromium } = require('/Users/gfhfyjbr/.npm/_npx/e058441c325e062a/node_modules/playwright-core');
-const out = path.resolve('gpui-fast/crates/gpui_perf/src/fast/glimm_assets');
+const out = path.resolve('crates/gpui_perf/src/fast/glimm_assets');
 await fs.mkdir(out, { recursive: true });
 const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--enable-experimental-web-platform-features'] });
 const context = await browser.newContext({ viewport: { width: 634, height: 476 }, deviceScaleFactor: 2 });

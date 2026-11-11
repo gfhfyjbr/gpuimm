@@ -15,7 +15,7 @@ SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
 
 `SDKROOT` is macOS-only: it keeps the linker and SDK from the same Xcode installation. Nothing changes the system's selected Xcode or global environment. On Linux and Windows, run the same Cargo command without `SDKROOT`. Linux needs the normal GPUI X11/Wayland, font and Vulkan dependencies; Windows needs Rust and the Windows SDK.
 
-The outer workspace also provides `./run-glimm.sh` for macOS/Linux and `.\run-glimm.ps1` for Windows PowerShell. Both select the same native example and enable its capture support.
+The repository root also provides `./run-glimm.sh` for macOS/Linux and `.\run-glimm.ps1` for Windows PowerShell. Both select the same native example and enable its capture support.
 
 The playground includes the nine original scenes: Generate data, Teammate joins, Invoice paid, Upgrade to Pro, Usage reset, Publish, Autopilot, Theme and Tasks. Original controls run their corresponding state transitions, work delays, shapes and palettes. The external customization panel changes settings for the next action.
 
@@ -197,12 +197,12 @@ Screenshot support needs the `gpui_platform_fast/test-support` feature used by t
 ```sh
 SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
   cargo run -p gpui_perf --example glimm --features gpui_platform_fast/test-support -- \
-  --capture ../glimm-frame.png --time 280 --demo 0
+  --capture glimm-frame.png --time 280 --demo 0
 ```
 
 `--demo 0..8` selects an original scene. `--scene-only` captures just its 634 × 476 reference viewport; otherwise the native window also shows the external customization panel. `--state initial|busy|final|transition` selects a deterministic state. `--time` is elapsed time since the native action, including its work delay. `--gather` leaves work unresolved. `--width` and `--height` set the external window size (minimum 1000 × 720). Captures are PNGs from the actual platform renderer (Metal, WGPU or Direct3D 11), without screen-recording permission; the application exits after saving. Linux X11 and Wayland use the window's own WGPU device and sprite atlas, not a second renderer.
 
-`smoke-glimm.mjs` writes 31 before/after/transition, gather, Band, custom-option and full-window captures for all nine examples. `GLIMM_DEMO_BIN`, `GLIMM_CAPTURE_PREFIX` and `GLIMM_SMOKE_RESULTS` select a platform executable and separate output names. The outer workspace's `compare-glimm-platforms.py linux|windows` builds reference/native comparisons and checks Sheet isolation for those captures. `compare-glimm-scenes.py` compares them to actual embedded browser references and requires zero changed pixels in the Sheet's three top panels, composer prompt and Add button during gather. Browser/CoreText antialiasing, corner shapes and shadow kernels are not bit-identical; these layout comparisons are separate from the shader fixture below.
+`smoke-glimm.mjs` writes 31 before/after/transition, gather, Band, custom-option and full-window captures for all nine examples. `GLIMM_DEMO_BIN`, `GLIMM_CAPTURE_PREFIX` and `GLIMM_SMOKE_RESULTS` select a platform executable and separate output names. The repository's `compare-glimm-platforms.py linux|windows` builds reference/native comparisons and checks Sheet isolation for those captures. `compare-glimm-scenes.py` compares them to actual embedded browser references and requires zero changed pixels in the Sheet's three top panels, composer prompt and Add button during gather. Browser/CoreText antialiasing, corner shapes and shadow kernels are not bit-identical; these layout comparisons are separate from the shader fixture below.
 
 ## Renderer and verification
 

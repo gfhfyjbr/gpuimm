@@ -1,6 +1,6 @@
 # Glimm в GPUI
 
-Локальная копия [longbridge/gpui-fast](https://github.com/longbridge/gpui-fast) находится в `gpui-fast/`, базовый коммит `4a4a89a`. Начальные `Cargo.toml` и `src/` внешнего проекта не менялись.
+Репозиторий — форк [longbridge/gpui-fast](https://github.com/longbridge/gpui-fast) с базовым коммитом `4a4a89a`, лежит прямо в корне. История upstream сохранена в ссылке `refs/gpui-fast/main`: на неё опирается `script/check-upstream`.
 
 ## Запуск
 
@@ -47,12 +47,12 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 Все параметры доступны через частичный JSON:
 
 ```sh
-./run-glimm.sh --config ../glimm-settings.json
-./run-glimm.sh --config ../glimm-band-settings.json
+./run-glimm.sh --config glimm-settings.json
+./run-glimm.sh --config glimm-band-settings.json
 ./run-glimm.sh --demo 7
 ```
 
-Пути CLI разрешаются относительно `gpui-fast/`. Публичный API и пример интеграции со **своим нативным содержимым**: [`gpui-fast/docs/glimm.md`](gpui-fast/docs/glimm.md).
+Пути CLI разрешаются относительно корня репозитория. Публичный API и пример интеграции со **своим нативным содержимым**: [`docs/glimm.md`](docs/glimm.md).
 
 ## Разработка эффектов
 
@@ -67,7 +67,7 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 - **Ползунок времени** под превью: клик или перетаскивание ставит эффект на паузу в нужном моменте, стрелки шагают по одному кадру, с Shift — по 100 мс.
 - **Настройки из `--config` перечитываются на лету**, включая уже идущий или поставленный на паузу эффект.
 
-В коде: `controller.transition(...)` и `resolve_with(...)` не дают перепутать порядок «снять кадр → изменить состояние», `glimm_origin(...)` + `controller.marked_point()` дают точку действия по реальному положению элемента. Подробности — раздел «Development loop» в [`gpui-fast/docs/glimm.md`](gpui-fast/docs/glimm.md).
+В коде: `controller.transition(...)` и `resolve_with(...)` не дают перепутать порядок «снять кадр → изменить состояние», `glimm_origin(...)` + `controller.marked_point()` дают точку действия по реальному положению элемента. Подробности — раздел «Development loop» в [`docs/glimm.md`](docs/glimm.md).
 
 Проверено на macOS (Metal), тестами WGPU на macOS и в Windows-VM (Direct3D 11 WARP, 13 из 13 GPU-тестов, включая перезагрузку шейдера). На Linux новый тест не перезапускался.
 
@@ -78,12 +78,12 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 ./run-glimm.sh --scene-only --demo 0
 
 # Кадры исходного и конечного состояний
-./run-glimm.sh --scene-only --demo 0 --state initial --capture ../glimm-native-sheet-before.png
-./run-glimm.sh --scene-only --demo 0 --state final --capture ../glimm-native-sheet-after.png
+./run-glimm.sh --scene-only --demo 0 --state initial --capture glimm-native-sheet-before.png
+./run-glimm.sh --scene-only --demo 0 --state final --capture glimm-native-sheet-after.png
 
 # Время отсчитывается от действия; таблица ожидает работу первые 2600 мс
-./run-glimm.sh --scene-only --demo 0 --time 3290 --capture ../glimm-native-sheet-transition.png
-./run-glimm.sh --scene-only --demo 0 --gather --time 1600 --capture ../glimm-native-sheet-gather.png
+./run-glimm.sh --scene-only --demo 0 --time 3290 --capture glimm-native-sheet-transition.png
+./run-glimm.sh --scene-only --demo 0 --gather --time 1600 --capture glimm-native-sheet-gather.png
 ```
 
 Скрипты в корне:
@@ -100,7 +100,7 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 
 ## Проверка
 
-Из `gpui-fast/`:
+Из корня репозитория:
 
 ```sh
 # macOS

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const root=process.cwd();
-const binary=process.env.GLIMM_DEMO_BIN ?? path.join(root,'gpui-fast/target/debug/examples/glimm');
+const binary=process.env.GLIMM_DEMO_BIN ?? path.join(root,'target/debug/examples/glimm');
 const prefix=process.env.GLIMM_CAPTURE_PREFIX ?? 'glimm-native';
 const resultsFile=process.env.GLIMM_SMOKE_RESULTS ?? 'glimm-demo-smoke.json';
 const demos=['sheet','join','invoice','upgrade','reset','publish','autopilot','theme','tasks'];
@@ -24,7 +24,7 @@ for(const test of cases){
   const file=path.join(root,`${prefix}-${test.name}.png`);
   const args=[...(test.desktop?[]:['--scene-only']),'--capture',file,'--demo',String(test.demo),...test.args];
   const started=performance.now();
-  const run=spawnSync(binary,args,{cwd:path.join(root,'gpui-fast'),encoding:'utf8',timeout:30000});
+  const run=spawnSync(binary,args,{cwd:root,encoding:'utf8',timeout:30000});
   const exists=fs.existsSync(file);
   const active=run.stderr?.includes(`active=${test.active}`);
   const ok=run.status===0&&exists&&active;

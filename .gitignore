@@ -25,3 +25,4 @@ __pycache__/
 !/glimm-reference-fixtures.json
 /glimm-*.txt
 /glimm-ubuntu.sources
+/.claude/worktrees/
