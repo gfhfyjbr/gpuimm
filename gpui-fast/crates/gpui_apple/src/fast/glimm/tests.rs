@@ -19,6 +19,18 @@ fn cache_counts(renderer: &MetalRenderer) -> (bool, usize, usize) {
 fn backend_name() -> &'static str {
     "metal"
 }
+fn shader() -> &'static str {
+    include_str!("../glimm.metal")
+}
+fn solid_green() -> (&'static str, &'static str) {
+    (
+        "float4 result = band+content*(1.0-band.a);",
+        "float4 result = float4(0,1,0,1);",
+    )
+}
+fn follow(renderer: &mut MetalRenderer, path: std::path::PathBuf) {
+    renderer.fast_glimm.source = Some(gpui::GlimmShaderSource::following(Some(path), shader()));
+}
 
 #[path = "../../../../gpui/src/fast/glimm/gpu_tests.rs"]
 mod shared;

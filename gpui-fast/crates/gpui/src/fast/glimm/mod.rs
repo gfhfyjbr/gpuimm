@@ -1,10 +1,15 @@
 //! Native port of the band and HTML-in-Canvas effects on glimm.dev.
 //! Shader mathematics and timing originate in glimm 0.4.1, MIT licensed.
 
+mod dev;
 mod options;
 mod palette;
 mod timeline;
 
+pub use dev::{
+    GLIMM_SHADER_DIR_ENV, GlimmDebugView, GlimmShaderSource, glimm_report_shader,
+    glimm_shader_error, glimm_shader_stamp,
+};
 pub use options::{GlimmDemo, GlimmDirection, GlimmEasing, GlimmEffect, GlimmOptions};
 pub use palette::{GlimmPalette, GlimmPaletteName};
 pub use timeline::{GlimmSample, GlimmTimeline};
@@ -38,6 +43,8 @@ struct Controller {
     bounds: Bounds<Pixels>,
     epoch: Option<Instant>,
     prepared: Option<Rc<Scene>>,
+    debug: GlimmDebugView,
+    marker: Option<Bounds<Pixels>>,
 }
 struct Run {
     token: GlimmToken,
@@ -225,6 +232,70 @@ impl GlimmController {
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.0.borrow().bounds
     }
+    /// Capture the current frame and start a sweep, then run `change` to commit the new state.
+    /// Unlike a bare `play`, the capture cannot end up after the change. Clone the controller out
+    /// of the view first when `change` borrows that view.
+    pub fn transition<C, R>(
+        &self,
+        options: GlimmOptions,
+        window: &mut Window,
+        cx: &mut C,
+        change: impl FnOnce(&mut Window, &mut C) -> R,
+    ) -> R
+    where
+        C: std::ops::DerefMut<Target = App>,
+    {
+        self.play(options, window, cx);
+        change(window, cx)
+    }
+    /// Resolve the matching pending run and only then run `commit` with the work's result.
+    /// Returns `None`, without calling `commit`, for a stale or cancelled token.
+    pub fn resolve_with<C, R>(
+        &self,
+        token: GlimmToken,
+        window: &mut Window,
+        cx: &mut C,
+        commit: impl FnOnce(&mut Window, &mut C) -> R,
+    ) -> Option<R>
+    where
+        C: std::ops::DerefMut<Target = App>,
+    {
+        self.resolve(token, window, cx).then(|| commit(window, cx))
+    }
+    /// The centre of the element wrapped by `glimm_origin`, in this scope's coordinates: a value
+    /// for `options.at` that follows the element wherever layout puts it.
+    pub fn marked_point(&self) -> Option<[f32; 2]> {
+        let state = self.0.borrow();
+        let center = state.marker?.center() - state.bounds.origin;
+        Some([center.x.into(), center.y.into()])
+    }
+    /// Draw a false-colour view of the content effect in place of the transition. It applies from
+    /// the next frame, a paused one included.
+    pub fn set_debug_view(&self, view: GlimmDebugView, window: &mut Window) {
+        self.0.borrow_mut().debug = view;
+        window.refresh();
+    }
+    /// The false-colour view in use.
+    pub fn debug_view(&self) -> GlimmDebugView {
+        self.0.borrow().debug
+    }
+    /// Milliseconds since the current run began, or the instant it is paused at.
+    pub fn elapsed_ms(&self, cx: &App) -> Option<f32> {
+        self.0.borrow().run.as_ref().map(|run| elapsed(run, cx))
+    }
+    /// When the current run ends, in the same milliseconds as `seek`. A run still gathering for
+    /// unfinished work has no end yet.
+    pub fn end_ms(&self) -> Option<f32> {
+        self.0.borrow().run.as_ref()?.timeline.end_ms()
+    }
+    /// Replace the settings of the run in flight, for live tuning. Time already elapsed is
+    /// evaluated against the new values; the captured old frame is kept.
+    pub fn retune(&self, options: GlimmOptions, window: &mut Window) {
+        if let Some(run) = &mut self.0.borrow_mut().run {
+            run.timeline.set_options(options);
+            window.refresh();
+        }
+    }
 }
 fn elapsed(run: &Run, cx: &App) -> f32 {
     run.paused
@@ -350,13 +421,15 @@ impl Element for GlimmScope {
                 && bounds.size.height >= viewport.height - crate::px(1.),
         );
         let clock = run.shader_offset + elapsed(run, cx) / 1000.;
+        let mut uniforms = uniforms(run.timeline.options(), sample, bounds, scale, full, clock);
+        uniforms.0[DEBUG_ROW][3] = state.debug.uniform();
         let frame = GlimmFrame {
             run_id: run.capture_id,
             bounds: bounds.scale(scale),
             clip: clip.scale(scale),
             old_scene: run.old.clone(),
             paint_range: range,
-            uniforms: uniforms(run.timeline.options(), sample, bounds, scale, full, clock),
+            uniforms,
         };
         window.next_frame.scene.fast_glimm.frames.push(frame);
         if run.paused.is_none() {
@@ -365,6 +438,75 @@ impl Element for GlimmScope {
     }
 }
 
+/// Mark `child` as a scope's point of action. Its centre, converted to scope coordinates, is read
+/// back with [`GlimmController::marked_point`]. The marker may sit inside or outside the scope.
+pub fn glimm_origin(controller: &GlimmController, child: impl IntoElement) -> GlimmOrigin {
+    GlimmOrigin {
+        controller: controller.clone(),
+        child: Some(child.into_any_element()),
+    }
+}
+/// Layout-transparent element that records where its child was laid out.
+pub struct GlimmOrigin {
+    controller: GlimmController,
+    child: Option<AnyElement>,
+}
+impl IntoElement for GlimmOrigin {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+impl Element for GlimmOrigin {
+    type RequestLayoutState = AnyElement;
+    type PrepaintState = ();
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, AnyElement) {
+        let mut child = self
+            .child
+            .take()
+            .expect("glimm origin layout requested twice");
+        (child.request_layout(window, cx), child)
+    }
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        child: &mut AnyElement,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.controller.0.borrow_mut().marker = Some(bounds);
+        child.prepaint(window, cx);
+    }
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        child: &mut AnyElement,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        child.paint(window, cx);
+    }
+}
+
+/// The palette's first row carries the debug view in its unused fourth component.
+const DEBUG_ROW: usize = 9;
 /// Renderer wire format. Every row matches a Metal `float4`; no implicit padding.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default)]

@@ -2,7 +2,8 @@ use crate::metal_renderer::{MetalRenderer, new_command_encoder_for_texture};
 use anyhow::{Context as _, Result};
 use gpui::{
     AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, ContentMask, Corners, DevicePixels,
-    GlimmFrame, GlimmUniforms, PolychromeSprite, ScaledPixels, Scene, Size, TileId, point, size,
+    GlimmFrame, GlimmShaderSource, GlimmUniforms, PolychromeSprite, ScaledPixels, Scene, Size,
+    TileId, point, size,
 };
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
@@ -20,6 +21,7 @@ const TEXTURE_BASE: u32 = 0xD000_0000;
 #[derive(Default)]
 pub(crate) struct GlimmRenderer {
     rendering: bool,
+    source: Option<GlimmShaderSource>,
     pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     live: Option<Texture>,
     old: HashMap<u64, Texture>,
@@ -70,8 +72,25 @@ fn render_inner(
 ) -> Result<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
     let w = viewport.width.0 as usize;
     let h = viewport.height.0 as usize;
+    let source = state
+        .source
+        .get_or_insert_with(|| GlimmShaderSource::new("glimm.metal", include_str!("glimm.metal")));
+    // A followed shader that fails to build keeps the previous pipeline in use.
+    if let Some(text) = source.take_changed() {
+        match pipeline(&renderer.device, target.pixelFormat(), &text) {
+            Ok(pipeline) => {
+                state.pipeline = Some(pipeline);
+                gpui::glimm_report_shader(Ok(()));
+            }
+            Err(error) => gpui::glimm_report_shader(Err(format!("{error:#}"))),
+        }
+    }
     if state.pipeline.is_none() {
-        state.pipeline = Some(pipeline(&renderer.device, target.pixelFormat())?);
+        state.pipeline = Some(pipeline(
+            &renderer.device,
+            target.pixelFormat(),
+            source.embedded(),
+        )?);
     }
     if state
         .live
@@ -333,9 +352,11 @@ fn mipmaps(
 fn pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     format: MTLPixelFormat,
+    source: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(include_str!("glimm.metal")), None)
+        .newLibraryWithSource_options_error(&NSString::from_str(source), None)
+        .map_err(|error| anyhow::anyhow!("{}", error.localizedDescription()))
         .context("compiling glimm Metal shaders")?;
     let descriptor = MTLRenderPipelineDescriptor::new();
     let vertex = library

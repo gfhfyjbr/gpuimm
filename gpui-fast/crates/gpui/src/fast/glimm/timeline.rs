@@ -57,6 +57,29 @@ impl GlimmTimeline {
     pub fn options(&self) -> &GlimmOptions {
         &self.options
     }
+    /// Replace the settings of a run in flight, validated like the originals.
+    pub fn set_options(&mut self, options: GlimmOptions) {
+        self.options = options.validated();
+    }
+    /// The elapsed time at which the run ends. A run still gathering for unfinished work, which
+    /// has neither been resolved nor cancelled, has no end yet.
+    pub fn end_ms(&self) -> Option<f32> {
+        if let Some((at, _)) = self.release {
+            return Some(at + 320.);
+        }
+        let (ready_at, _, snap_ms) = self.ready?;
+        let band = self.options.effect == GlimmEffect::Band;
+        let outro = if band { self.options.outro_ms } else { 0. };
+        if let Some((fast_at, _)) = self.fast {
+            return Some(fast_at.max(ready_at + snap_ms) + 160. + outro);
+        }
+        let sweep = if band {
+            self.options.sweep_ms.max(80.)
+        } else {
+            self.options.sweep_ms
+        };
+        Some(ready_at + snap_ms + sweep + outro)
+    }
     /// Commit successful work. Returns false after cancellation or an earlier commit.
     pub fn resolve(&mut self, elapsed_ms: f32) -> bool {
         if self.ready.is_some() || self.release.is_some() {

@@ -62,6 +62,12 @@ float4 content(float2 px) {
         col.b = lerp(page(sp - dir * split, false, lod).b, page(sp - dir * split, true, lod).b, mix_new);
     }
     col.rgb *= 1.0 - .09 * dim * gather * (1.0 - near_origin);
+    // False-colour views for development (GlimmDebugView); 0 draws the transition.
+    float debug = v[9].w;
+    if (debug > 3.5) return float4(crest, trough, sm, 1.0);
+    if (debug > 2.5) return float4(saturate(blur / 32.0).xxx, 1.0);
+    if (debug > 1.5) return float4(saturate(float2(.5, .5) + (sp - px) / 64.0), .5, 1.0);
+    if (debug > 0.5) return float4(mix_new.xxx, 1.0);
     col.rgb = min(col.rgb, col.a);
     return col;
 }
@@ -107,6 +113,8 @@ float4 band(float2 px) {
 float4 glimm_fragment(float4 position : SV_Position) : SV_Target {
     float2 px = (position.xy - v[1].xy) / v[0].z;
     float4 p = v[7].w > .5 ? content(px) : page(px, true, 0);
+    // A debug view replaces the frame, band included, so its colours stay readable.
+    if (v[9].w > .5 && v[7].w > .5) return p;
     float4 b = band(px);
     float4 result = b + p * (1.0 - b.a);
     // The sprite pipeline consumes straight alpha, unlike the scoped raster.

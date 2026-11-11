@@ -132,9 +132,11 @@ pub use fast::dynamic_textures::{
     DynamicTexture, DynamicTextureId, DynamicTexturePlatform, set_dynamic_texture_platform,
 };
 pub use fast::glimm::{
-    GlimmController, GlimmDemo, GlimmDirection, GlimmEasing, GlimmEffect, GlimmFrame, GlimmOptions,
-    GlimmPalette, GlimmPaletteName, GlimmSample, GlimmScene, GlimmScope, GlimmTimeline, GlimmToken,
-    GlimmUniforms, glimm_scope,
+    GLIMM_SHADER_DIR_ENV, GlimmController, GlimmDebugView, GlimmDemo, GlimmDirection, GlimmEasing,
+    GlimmEffect, GlimmFrame, GlimmOptions, GlimmOrigin, GlimmPalette, GlimmPaletteName,
+    GlimmSample, GlimmScene, GlimmScope, GlimmShaderSource, GlimmTimeline, GlimmToken,
+    GlimmUniforms, glimm_origin, glimm_report_shader, glimm_scope, glimm_shader_error,
+    glimm_shader_stamp,
 };
 pub use fast::layers::scene::{
     LAYER_TILE_TEXTURE_BASE, LayerContent, LayerFrame, LayerKey, SceneLayers, TileCoord,

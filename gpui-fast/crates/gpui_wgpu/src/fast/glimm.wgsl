@@ -81,6 +81,12 @@ fn content(px: vec2<f32>) -> vec4<f32> {
         col.b = mix(page(sp - dir * split, false, lod).b, page(sp - dir * split, true, lod).b, mix_new);
     }
     let rgb = col.rgb * (1.0 - 0.09 * dim * gather * (1.0 - near_origin));
+    // False-colour views for development (GlimmDebugView); 0 draws the transition.
+    let debug = u.v[9].w;
+    if debug > 3.5 { return vec4(crest, trough, span_mask, 1.0); }
+    if debug > 2.5 { return vec4(vec3(clamp(blur / 32.0, 0.0, 1.0)), 1.0); }
+    if debug > 1.5 { return vec4(clamp(vec2(0.5) + (sp - px) / 64.0, vec2(0.0), vec2(1.0)), 0.5, 1.0); }
+    if debug > 0.5 { return vec4(vec3(mix_new), 1.0); }
     return vec4(min(rgb, vec3(col.a)), col.a);
 }
 fn palette(t: f32) -> vec3<f32> {
@@ -140,6 +146,8 @@ fn band(px: vec2<f32>) -> vec4<f32> {
     var page_color: vec4<f32>;
     if u.v[7].w > 0.5 { page_color = content(px); }
     else { page_color = page(px, true, 0.0); }
+    // A debug view replaces the frame, band included, so its colours stay readable.
+    if u.v[9].w > 0.5 && u.v[7].w > 0.5 { return page_color; }
     let band_color = band(px);
     let result = band_color + page_color * (1.0 - band_color.a);
     // The sprite pipeline consumes straight alpha, unlike the scoped raster.

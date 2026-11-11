@@ -1,6 +1,7 @@
 use super::{
-    GlimmController, GlimmDemo, GlimmDirection, GlimmEasing, GlimmOptions, GlimmPalette,
-    GlimmPaletteName, GlimmSample, GlimmTimeline, GlimmUniforms, ScopePaint, glimm_scope, uniforms,
+    GlimmController, GlimmDebugView, GlimmDemo, GlimmDirection, GlimmEasing, GlimmOptions,
+    GlimmPalette, GlimmPaletteName, GlimmSample, GlimmShaderSource, GlimmTimeline, GlimmUniforms,
+    ScopePaint, glimm_origin, glimm_scope, glimm_shader_error, uniforms,
 };
 use crate::{
     AppContext as _, Bounds, Context, IntoElement, ParentElement as _, Render, Scene, Styled as _,
@@ -347,4 +348,156 @@ fn scope_keeps_layout_and_does_not_schedule_idle_frames() {
         assert!(window.next_frame_callbacks.borrow().is_empty());
     })
     .unwrap();
+}
+#[test]
+fn a_run_knows_its_end_once_it_can_finish() {
+    let mut waiting = GlimmTimeline::new(GlimmOptions::default(), true);
+    assert_eq!(waiting.end_ms(), None);
+    waiting.cancel(500.);
+    assert_eq!(waiting.end_ms(), Some(820.));
+
+    let options = GlimmOptions::band();
+    let mut band = GlimmTimeline::new(options.clone(), false);
+    assert_eq!(
+        band.end_ms(),
+        Some(options.sweep_ms.max(80.) + options.outro_ms)
+    );
+    band.fast_forward(100.);
+    assert_eq!(band.end_ms(), Some(260. + options.outro_ms));
+
+    let mut scope = GlimmTimeline::new(GlimmOptions::default(), false);
+    let end = scope.end_ms().unwrap();
+    assert!(scope.sample(end - 1.).active && !scope.sample(end).active);
+    let mut longer = GlimmOptions::default();
+    longer.sweep_ms = end + 900.;
+    scope.set_options(longer);
+    assert_eq!(scope.end_ms(), Some(end + 900.));
+    assert!(scope.sample(end).active);
+}
+#[test]
+fn transition_captures_before_the_change_and_resolve_with_guards_the_commit() {
+    let mut cx = TestAppContext::single();
+    let window = cx.add_window(|_, _| TestScope {
+        controller: GlimmController::new(),
+    });
+    window
+        .update(&mut cx, |view, window, cx| {
+            let controller = view.controller.clone();
+            let mut changed = false;
+            let captured = controller.transition(GlimmOptions::default(), window, cx, |_, _| {
+                changed = true;
+                controller.0.borrow().run.is_some()
+            });
+            assert!(captured && changed);
+
+            let stale = controller.anticipate(GlimmOptions::default(), window, cx);
+            let fresh = controller.anticipate(GlimmOptions::default(), window, cx);
+            assert_eq!(controller.resolve_with(stale, window, cx, |_, _| 1), None);
+            assert_eq!(
+                controller.resolve_with(fresh, window, cx, |_, _| 2),
+                Some(2)
+            );
+            assert_eq!(controller.resolve_with(fresh, window, cx, |_, _| 3), None);
+        })
+        .unwrap();
+}
+#[test]
+fn debug_view_and_retuned_settings_reach_a_paused_frame() {
+    let mut cx = TestAppContext::single();
+    let window = cx.add_window(|_, _| TestScope {
+        controller: GlimmController::new(),
+    });
+    window
+        .update(&mut cx, |view, window, cx| {
+            assert_eq!(view.controller.elapsed_ms(cx), None);
+            view.controller.play(GlimmOptions::default(), window, cx);
+            view.controller.seek(300., window);
+            assert_eq!(view.controller.debug_view(), GlimmDebugView::Off);
+            view.controller.set_debug_view(GlimmDebugView::Blur, window);
+            let mut options = GlimmOptions::default();
+            options.sweep_ms = 3000.;
+            options.span = 0.4;
+            view.controller.retune(options, window);
+            assert_eq!(view.controller.end_ms(), Some(3000.));
+            assert_eq!(view.controller.elapsed_ms(cx), Some(300.));
+        })
+        .unwrap();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        let uniforms = window.rendered_frame.scene.fast_glimm.frames[0].uniforms.0;
+        assert_eq!(uniforms[9][3], 3.);
+        assert_eq!(uniforms[5][2], 0.4);
+    })
+    .unwrap();
+}
+struct MarkedScope {
+    controller: GlimmController,
+}
+impl Render for MarkedScope {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().pt(px(30.)).pl(px(10.)).child(glimm_scope(
+            "scope",
+            &self.controller,
+            div().relative().size(px(200.)).child(glimm_origin(
+                &self.controller,
+                div()
+                    .absolute()
+                    .left(px(40.))
+                    .top(px(20.))
+                    .w(px(20.))
+                    .h(px(10.)),
+            )),
+        ))
+    }
+}
+#[test]
+fn a_marked_element_gives_its_centre_in_scope_coordinates() {
+    let mut cx = TestAppContext::single();
+    let controller = GlimmController::new();
+    assert_eq!(controller.marked_point(), None);
+    let window = cx.add_window({
+        let controller = controller.clone();
+        |_, _| MarkedScope { controller }
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+    })
+    .unwrap();
+    assert_eq!(controller.marked_point(), Some([50., 25.]));
+}
+#[test]
+fn a_followed_shader_is_taken_again_only_when_its_file_changes() {
+    let mut built_in = GlimmShaderSource::following(None, "built in");
+    assert_eq!(built_in.take_changed().as_deref(), Some("built in"));
+    assert_eq!(built_in.take_changed(), None);
+
+    let directory = std::env::temp_dir().join(format!("glimm-shader-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("glimm.metal");
+    let write = |text: &str, seconds: u64| {
+        std::fs::write(&path, text).unwrap();
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+    };
+    write("one", 1_000);
+    let mut followed = GlimmShaderSource::following(Some(path.clone()), "built in");
+    assert_eq!(followed.take_changed().as_deref(), Some("one"));
+    assert_eq!(followed.take_changed(), None);
+    write("two", 2_000);
+    assert_eq!(followed.take_changed().as_deref(), Some("two"));
+
+    // A missing file is reported once and leaves the caller on its current pipeline.
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(followed.take_changed(), None);
+    assert!(glimm_shader_error().unwrap().contains("glimm.metal"));
+    assert_eq!(followed.take_changed(), None);
+    assert_eq!(followed.embedded(), "built in");
+    write("three", 3_000);
+    assert_eq!(followed.take_changed().as_deref(), Some("three"));
+    std::fs::remove_dir_all(&directory).unwrap();
 }

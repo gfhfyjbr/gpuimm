@@ -3,7 +3,7 @@ use std::{ffi::CStr, ops::Range, slice};
 use anyhow::{Context as _, Result};
 use gpui::{
     AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, ContentMask, Corners, DevicePixels,
-    GlimmFrame, GlimmUniforms, PolychromeSprite, ScaledPixels, Scene, TileId,
+    GlimmFrame, GlimmShaderSource, GlimmUniforms, PolychromeSprite, ScaledPixels, Scene, TileId,
     WindowBackgroundAppearance, point, size,
 };
 use windows::{
@@ -35,6 +35,7 @@ const TEXTURE_BASE: u32 = 0xd000_0000;
 pub(crate) struct GlimmRenderer {
     rendering: bool,
     device: Option<ID3D11Device>,
+    source: Option<GlimmShaderSource>,
     pipeline: Option<Pipeline>,
     live: Option<Texture>,
     old: Vec<(u64, Texture)>,
@@ -103,9 +104,9 @@ struct Pipeline {
 }
 
 impl Pipeline {
-    fn new(device: &ID3D11Device) -> Result<Self> {
-        let vs = compile(c"glimm_vertex", c"vs_4_1")?;
-        let ps = compile(c"glimm_fragment", c"ps_4_1")?;
+    fn new(device: &ID3D11Device, source: &str) -> Result<Self> {
+        let vs = compile(source, c"glimm_vertex", c"vs_4_1")?;
+        let ps = compile(source, c"glimm_fragment", c"ps_4_1")?;
         let mut vertex = None;
         let mut fragment = None;
         let mut sampler = None;
@@ -167,8 +168,7 @@ impl Pipeline {
     }
 }
 
-fn compile(entry: &CStr, target: &CStr) -> Result<ID3DBlob> {
-    let source = include_str!("glimm.hlsl");
+fn compile(source: &str, entry: &CStr, target: &CStr) -> Result<ID3DBlob> {
     let mut code = None;
     let mut errors = None;
     let result = unsafe {
@@ -298,8 +298,21 @@ fn compose(
         state.clear();
         state.viewport = viewport;
     }
+    let source = state
+        .source
+        .get_or_insert_with(|| GlimmShaderSource::new("glimm.hlsl", include_str!("glimm.hlsl")));
+    // A followed shader that fails to compile keeps the previous pipeline in use.
+    if let Some(text) = source.take_changed() {
+        match Pipeline::new(device, &text) {
+            Ok(pipeline) => {
+                state.pipeline = Some(pipeline);
+                gpui::glimm_report_shader(Ok(()));
+            }
+            Err(error) => gpui::glimm_report_shader(Err(format!("{error:#}"))),
+        }
+    }
     if state.pipeline.is_none() {
-        state.pipeline = Some(Pipeline::new(device)?);
+        state.pipeline = Some(Pipeline::new(device, source.embedded())?);
     }
     if state.live.is_none() {
         state.live = Some(Texture::new(device, viewport, false)?);

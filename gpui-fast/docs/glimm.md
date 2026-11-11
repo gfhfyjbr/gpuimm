@@ -76,6 +76,48 @@ controller.cancel(token, window, cx);
 
 Starting another `play` replaces the current run and snapshots the current native scene. It is not a queue: it does not preserve the previous shader's already-deformed framebuffer. Applications that require that particular interruption policy should finish/cancel the current run before committing another state.
 
+## Ordering and origin helpers
+
+`play` must capture the old frame before the application changes its state, and `resolve` must come before the result is committed. Two wrappers make the wrong order impossible to write:
+
+```rust
+// Clone the controller out first: the closure borrows the view.
+let controller = self.controller.clone();
+controller.transition(options, window, cx, |_, cx| {
+    self.show_generated_data = true;
+    cx.notify();
+});
+
+// Returns None, without running the closure, for a stale or cancelled token.
+controller.resolve_with(token, window, cx, |_, cx| {
+    self.data = completed_data;
+    cx.notify();
+});
+```
+
+`glimm_origin(&controller, element)` wraps the element an effect starts from. It changes neither layout nor painting; it records where the element was laid out, and `controller.marked_point()` returns its centre in scope coordinates, ready for `options.at`. The marker may be inside or outside the scope.
+
+## Development loop
+
+These aids are for building new effects; none of them changes a frame unless asked to.
+
+**Follow the shader file.** Set `GPUI_GLIMM_SHADER_DIR` to a directory holding `glimm.metal`, `glimm.wgsl` or `glimm.hlsl`. The renderer compiles that file in place of its built-in source and compiles it again whenever the file's modification time changes. `./run-glimm.sh --dev` (`.\run-glimm.ps1 -dev`) points it at the platform's own source file, so saving the shader in an editor updates the running playground. A file that fails to build leaves the previous shader in use; before any shader has built, the built-in one is used. The compiler's message, with line and column, is shown under the preview, printed to stderr, and available from `gpui::glimm_shader_error()`. An application that wants the same loop polls `gpui::glimm_shader_stamp()` and calls `window.refresh()` when it changes, which the playground does every 200ms while something is followed; with nothing followed it does not poll.
+
+**Look inside the effect.** `controller.set_debug_view(view, window)` replaces the transition with a false-colour view of the content shader, from the next frame, a paused one included:
+
+| View | Shows |
+| --- | --- |
+| `Mix` | which frame each pixel samples: old black, new white |
+| `Displacement` | the sampling offset: red horizontal, green vertical, mid-grey none (±32 logical pixels full scale) |
+| `Blur` | blur radius, black sharp, white 32 logical pixels |
+| `Front` | crest red, trough green, cross-axis span mask blue |
+
+The value travels in the fourth component of uniform row 9, which the palette does not use; the same branch exists in all three shaders. The playground has a button for each view, and `--debug-view mix|displacement|blur|front` selects one for a capture.
+
+**Scrub time.** The bar under the preview seeks the run and pauses it: click or drag, Left/Right to step one 60Hz frame, Shift for 100ms. It spans `controller.end_ms()`, which is unknown while a run still gathers for unfinished work; then it spans what has gathered so far. `controller.elapsed_ms(cx)` reads the current position. Seeking does not undo what the application did at the burst, so scrubbing back across it shows the shader's earlier frame over the later application state.
+
+**Tune settings live.** Edits to the `--config` file apply while the window is open: its keys overlay the panel's current settings, and `controller.retune(options, window)` hands them to a run in flight without capturing a new frame, so a paused frame redraws with the new values. A file that does not parse is reported and ignored.
+
 ## Original examples and element-relative scopes
 
 The playground reproduces the nine original embedded examples, not a generic application with nine parameter presets. Its reference frame is 634 × 476 logical pixels. Layout measurements in `crates/gpui_perf/src/fast/glimm_assets/scenes.json` become native GPUI quads, shaped Inter text, images and accessible hit targets. PNGs contain original photographs, SVG/CSS illustrations, gradients and decorative backdrop textures, never a flattened page screenshot. No browser or website code runs in the application.
@@ -166,7 +208,7 @@ SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
 
 Code lives in:
 
-- `crates/gpui/src/fast/glimm/`: options, palette fitting, pure timeline, scope, controller and scene metadata.
+- `crates/gpui/src/fast/glimm/`: options, palette fitting, pure timeline, scope, controller and scene metadata; `dev.rs` holds the shader-following source, build status and debug views.
 - `crates/gpui_apple/src/fast/glimm.rs`: isolated-scene compositor and temporary texture ownership.
 - `crates/gpui_apple/src/fast/glimm.metal`: original band, suction, progressive mipmapped blur, travelling crest/trough, old/new dissolve, chromatic split and dimming formulas.
 - `crates/gpui_wgpu/src/fast/glimm.rs` and `glimm.wgsl`: WGPU compositor, premultiplied scope raster, cropped mip passes and cached textures.

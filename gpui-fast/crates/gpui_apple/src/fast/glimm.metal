@@ -71,6 +71,12 @@ float4 glimm_content(float2 px, constant GlimmUniforms &u,
         col.b = mix(glimm_page(sp-dir*split,false,lod,u,live,old).b,glimm_page(sp-dir*split,true,lod,u,live,old).b,mix_new);
     }
     col.rgb *= 1.0-0.09*dim*gather*(1.0-near_origin);
+    // False-colour views for development (GlimmDebugView); 0 draws the transition.
+    float debug = u.v[9].w;
+    if (debug > 3.5) return float4(crest,trough,span_mask,1);
+    if (debug > 2.5) return float4(float3(clamp(blur/32.0,0.0f,1.0f)),1);
+    if (debug > 1.5) return float4(clamp(float2(0.5)+(sp-px)/64.0,float2(0),float2(1)),0.5,1);
+    if (debug > 0.5) return float4(float3(mix_new),1);
     return float4(min(col.rgb,float3(col.a)),col.a);
 }
 float3 glimm_palette(float t, constant GlimmUniforms &u) {
@@ -121,6 +127,8 @@ fragment float4 glimm_fragment(GlimmVertex in [[stage_in]], constant GlimmUnifor
     texture2d<float> live [[texture(0)]], texture2d<float> old [[texture(1)]]) {
     float2 px = (in.position.xy-u.v[1].xy)/u.v[0].z;
     float4 content = u.v[7].w>0.5 ? glimm_content(px,u,live,old) : glimm_page(px,true,0,u,live,old);
+    // A debug view replaces the frame, band included, so its colours stay readable.
+    if (u.v[9].w>0.5 && u.v[7].w>0.5) return content;
     float4 band = glimm_band(px,u);
     float4 result = band+content*(1.0-band.a);
     // GPUI's polychrome pipeline expects straight alpha; the reference shader is premultiplied.

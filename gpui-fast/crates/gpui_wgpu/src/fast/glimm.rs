@@ -1,7 +1,8 @@
 use anyhow::Result;
 use gpui::{
     AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds, ContentMask, Corners, DevicePixels,
-    GlimmFrame, GlimmUniforms, PolychromeSprite, ScaledPixels, Scene, Size, TileId, point, size,
+    GlimmFrame, GlimmShaderSource, GlimmUniforms, PolychromeSprite, ScaledPixels, Scene, Size,
+    TileId, point, size,
 };
 use wgpu::util::DeviceExt as _;
 
@@ -12,6 +13,7 @@ const TEXTURE_BASE: u32 = 0xd000_0000;
 #[derive(Default)]
 pub(crate) struct GlimmRenderer {
     rendering: bool,
+    source: Option<GlimmShaderSource>,
     pipeline: Option<Pipeline>,
     raster_pipelines: Option<WgpuPipelines>,
     live: Option<Texture>,
@@ -76,10 +78,28 @@ impl Texture {
 }
 
 impl Pipeline {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    /// Build from a followed shader file, returning its validation error rather than a pipeline
+    /// that would draw nothing.
+    fn checked(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        source: &str,
+    ) -> Result<Self, String> {
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let pipeline = Self::new(device, format, source);
+        // Native devices resolve a popped scope at once; one that reports later is caught by the
+        // context's uncaptured-error handler instead.
+        let mut popped = std::pin::pin!(scope.pop());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match std::future::Future::poll(popped.as_mut(), &mut context) {
+            std::task::Poll::Ready(Some(error)) => Err(error.to_string()),
+            _ => Ok(pipeline),
+        }
+    }
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, source: &str) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("glimm_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("glimm.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("glimm_bindings"),
@@ -306,11 +326,27 @@ pub(crate) fn render(
             state.clear();
             state.viewport = dimensions;
         }
+        let source = state.source.get_or_insert_with(|| {
+            GlimmShaderSource::new("glimm.wgsl", include_str!("glimm.wgsl"))
+        });
+        // A followed shader that fails validation keeps the previous pipeline in use.
+        if let Some(text) = source.take_changed() {
+            match Pipeline::checked(&renderer.resources().device, renderer.target_format, &text) {
+                Ok(pipeline) => {
+                    state.pipeline = Some(pipeline);
+                    gpui::glimm_report_shader(Ok(()));
+                }
+                Err(error) => gpui::glimm_report_shader(Err(error)),
+            }
+        }
         if state.pipeline.is_none() {
             state.pipeline = Some(Pipeline::new(
                 &renderer.resources().device,
                 renderer.target_format,
+                source.embedded(),
             ));
+        }
+        if state.raster_pipelines.is_none() {
             let target = crate::fast::frame::FrameHost::target(renderer)?;
             state.raster_pipelines = Some(WgpuRendererCore::create_pipelines(
                 target.device,

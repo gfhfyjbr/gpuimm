@@ -17,6 +17,19 @@ fn cache_counts(renderer: &WgpuHeadlessRenderer) -> (bool, usize, usize) {
 fn backend_name() -> &'static str {
     "wgpu"
 }
+fn shader() -> &'static str {
+    include_str!("../glimm.wgsl")
+}
+fn solid_green() -> (&'static str, &'static str) {
+    (
+        "let result = band_color + page_color * (1.0 - band_color.a);",
+        "let result = vec4(0.0, 1.0, 0.0, 1.0);",
+    )
+}
+fn follow(renderer: &mut WgpuHeadlessRenderer, path: std::path::PathBuf) {
+    renderer.core.fast_glimm.source =
+        Some(gpui::GlimmShaderSource::following(Some(path), shader()));
+}
 
 #[path = "../../../../gpui/src/fast/glimm/gpu_tests.rs"]
 mod shared;

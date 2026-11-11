@@ -7,17 +7,17 @@ mod scenes;
 use gpui::accesskit::{Role, Toggled};
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, ElementId, FocusHandle,
-    GlimmController, GlimmDemo, GlimmDirection, GlimmEffect, GlimmOptions, GlimmPalette,
-    GlimmPaletteName, GlimmToken, InteractiveElement, IntoElement, ParentElement, Pixels, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, canvas,
-    div, glimm_scope, point, px, rgb, size,
+    GlimmController, GlimmDebugView, GlimmDemo, GlimmDirection, GlimmEffect, GlimmOptions,
+    GlimmPalette, GlimmPaletteName, GlimmToken, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window, WindowBounds,
+    WindowOptions, canvas, div, glimm_scope, point, px, rgb, size,
 };
 use scenes::{Control, HEIGHT, Layer, Scenes, WIDTH, route};
 use std::{
     cell::RefCell,
     path::PathBuf,
     rc::Rc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 struct Playground {
@@ -52,6 +52,30 @@ struct Playground {
     scene_only: bool,
     inspect: bool,
     debug_anchor: bool,
+    config_path: Option<PathBuf>,
+    config_stamp: Option<SystemTime>,
+    config_error: Option<SharedString>,
+    shader_stamp: Option<SystemTime>,
+    shader_error: Option<String>,
+    frame_at: Option<Instant>,
+    frame_ms: f32,
+}
+/// Overlay the keys of a partial JSON settings file on `base`.
+fn merge_config(base: &GlimmOptions, text: &str) -> Result<GlimmOptions, String> {
+    let config: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let config = config.as_object().ok_or("settings must be a JSON object")?;
+    let mut merged = serde_json::to_value(base).map_err(|e| e.to_string())?;
+    for (key, value) in config {
+        merged[key] = value.clone();
+    }
+    serde_json::from_value::<GlimmOptions>(merged)
+        .map(GlimmOptions::validated)
+        .map_err(|e| e.to_string())
+}
+fn modified(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|data| data.modified())
+        .ok()
 }
 #[derive(Clone, Copy)]
 enum Event {
@@ -96,7 +120,211 @@ impl Playground {
             scene_only,
             inspect,
             debug_anchor: false,
+            config_path: None,
+            config_stamp: None,
+            config_error: None,
+            shader_stamp: gpui::glimm_shader_stamp(),
+            shader_error: None,
+            frame_at: None,
+            frame_ms: 0.,
         }
+    }
+    /// Read the settings file and apply it to the panel and to a run in flight.
+    fn load_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        self.config_stamp = modified(&path);
+        let loaded = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| merge_config(&self.options, &text));
+        match loaded {
+            Ok(options) => {
+                self.element_origin = options.at.is_none();
+                self.options = options;
+                self.config_error = None;
+                let options = self.run_options();
+                self.controller.retune(options, window);
+            }
+            Err(error) => {
+                let problem = format!("{}: {error}", path.display());
+                eprintln!("glimm settings not applied: {problem}");
+                self.config_error = Some(problem.into());
+            }
+        }
+        cx.notify();
+    }
+    /// Pick up an edited settings file or shader. Returns whether anything is being followed.
+    fn follow_files(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let shader = gpui::glimm_shader_stamp();
+        if shader != self.shader_stamp {
+            self.shader_stamp = shader;
+            // The renderer rebuilds its pipeline when it next draws an effect frame.
+            window.refresh();
+            cx.notify();
+        }
+        if let Some(path) = &self.config_path {
+            if modified(path) != self.config_stamp {
+                self.load_config(window, cx);
+            }
+        }
+        // The renderer learns of a bad shader while drawing; say so where the editor is too.
+        let error = gpui::glimm_shader_error();
+        if error != self.shader_error {
+            match &error {
+                Some(error) => eprintln!("glimm shader not applied: {error}"),
+                None => eprintln!("glimm shader applied"),
+            }
+            self.shader_error = error;
+            cx.notify();
+        }
+        self.config_path.is_some() || std::env::var_os(gpui::GLIMM_SHADER_DIR_ENV).is_some()
+    }
+    /// Smooth the interval between redraws of a playing effect; a paused or idle one has none.
+    fn measure_frame(&mut self, playing: bool) {
+        let now = Instant::now();
+        match (playing, self.frame_at.replace(now)) {
+            (true, Some(last)) => {
+                let ms = (now - last).as_secs_f32() * 1000.;
+                self.frame_ms = if self.frame_ms > 0. {
+                    self.frame_ms * 0.9 + ms * 0.1
+                } else {
+                    ms
+                };
+            }
+            (true, None) => {}
+            (false, _) => {
+                self.frame_at = None;
+                self.frame_ms = 0.;
+            }
+        }
+    }
+    /// What one active run holds on the GPU, estimated from the renderers' allocation scheme:
+    /// a viewport-sized raster target and output, plus the old and current scope crops with
+    /// their mipmaps, at four bytes a pixel.
+    fn texture_megabytes(&self, window: &Window) -> f32 {
+        let pixels = |size: gpui::Size<Pixels>| {
+            f32::from(size.width) * f32::from(size.height) * window.scale_factor().powi(2)
+        };
+        let viewport = pixels(window.viewport_size());
+        let scope = pixels(self.controller.bounds().size);
+        (2. * viewport + 2. * scope * 4. / 3.) * 4. / (1024. * 1024.)
+    }
+    /// Freeze the run at `fraction` of its length, short of the end, which would finish it.
+    fn scrub(&mut self, fraction: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(length) = self.run_length(cx) else {
+            return;
+        };
+        self.controller
+            .seek((fraction.clamp(0., 1.) * length).min(length - 1.), window);
+        self.paused = true;
+        cx.notify();
+    }
+    /// The length the scrubber spans: the run's end once known, else what has gathered so far.
+    fn run_length(&self, cx: &App) -> Option<f32> {
+        let elapsed = self.controller.elapsed_ms(cx)?;
+        Some(
+            self.controller
+                .end_ms()
+                .unwrap_or_else(|| elapsed.max(self.options.gather_ms))
+                .max(1.),
+        )
+    }
+    fn scrubber(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let elapsed = self.controller.elapsed_ms(cx);
+        let length = self.run_length(cx);
+        let fraction = elapsed
+            .zip(length)
+            .map_or(0., |(t, length)| (t / length).clamp(0., 1.));
+        let bounds = Rc::new(RefCell::new(Bounds::<Pixels>::default()));
+        let paint_bounds = bounds.clone();
+        let click_bounds = bounds.clone();
+        let at = move |bounds: &RefCell<Bounds<Pixels>>, x: Pixels| {
+            let b = *bounds.borrow();
+            ((x - b.origin.x) / b.size.width).clamp(0., 1.)
+        };
+        let label = match elapsed.zip(length) {
+            Some((t, length)) => format!("{t:.0} / {length:.0} ms"),
+            None => "no run · start an action, then scrub".to_owned(),
+        };
+        div()
+            .w(px(WIDTH))
+            .flex()
+            .items_center()
+            .gap_3()
+            .text_size(px(12.))
+            .text_color(rgb(0x737373))
+            .opacity(if elapsed.is_some() { 1. } else { 0.5 })
+            .child(
+                div()
+                    .id("scrubber")
+                    .focusable()
+                    .tab_stop(true)
+                    .role(Role::Slider)
+                    .aria_label("Effect time")
+                    .relative()
+                    .flex_1()
+                    .h(px(18.))
+                    .cursor_pointer()
+                    .focus_visible(|s| s.bg(rgb(0xe5efff)))
+                    .child(
+                        canvas(
+                            move |b, _, _| *paint_bounds.borrow_mut() = b,
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(8.))
+                            .w_full()
+                            .h(px(2.))
+                            .bg(rgb(0xe4e4e7)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(gpui::relative(fraction))
+                            .top(px(4.))
+                            .size(px(10.))
+                            .rounded_full()
+                            .bg(rgb(0x27272a)),
+                    )
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            this.scrub(at(&click_bounds, event.position().x), window, cx);
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(
+                        move |this, event: &gpui::MouseMoveEvent, window, cx| {
+                            if event.dragging() {
+                                this.scrub(at(&bounds, event.position.x), window, cx);
+                            }
+                        },
+                    ))
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        // One 60 Hz frame a press; a tenth of a second with Shift.
+                        let step = if event.keystroke.modifiers.shift {
+                            100.
+                        } else {
+                            1000. / 60.
+                        };
+                        let step = match event.keystroke.key.as_str() {
+                            "left" | "down" => -step,
+                            "right" | "up" => step,
+                            _ => return,
+                        };
+                        if let Some((t, length)) =
+                            this.controller.elapsed_ms(cx).zip(this.run_length(cx))
+                        {
+                            this.scrub((t + step) / length, window, cx);
+                        }
+                        cx.stop_propagation();
+                    })),
+            )
+            .child(div().w(px(150.)).flex_shrink_0().child(label))
     }
     fn later(&self, ms: u64, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         let epoch = self.epoch;
@@ -834,6 +1062,19 @@ impl Playground {
             ));
         }
         controls = controls.child(palettes);
+        let mut views = div().flex().flex_wrap().gap_1();
+        for (ix, view) in GlimmDebugView::ALL.into_iter().enumerate() {
+            views = views.child(self.button(
+                ElementId::Name(format!("debug-view-{ix}").into()),
+                view.name(),
+                self.controller.debug_view() == view,
+                move |s, window, cx| {
+                    s.controller.set_debug_view(view, window);
+                    cx.notify();
+                },
+            ));
+        }
+        controls = controls.child("DEBUG VIEW").child(views);
         for knob in Knob::ALL {
             controls = controls.child(self.slider(knob, cx));
         }
@@ -897,6 +1138,7 @@ impl Render for Playground {
             self.burst(window, cx);
         }
         let sample = self.controller.sample(cx);
+        self.measure_frame(sample.active && !self.paused);
         if self.running && !sample.active && self.pending.is_none() {
             self.running = false;
             self.busy = false;
@@ -1026,6 +1268,7 @@ impl Render for Playground {
                             .gap_4()
                             .items_center()
                             .child(self.preview(cx))
+                            .child(self.scrubber(cx))
                             .child(actions)
                             .child(
                                 div()
@@ -1038,7 +1281,39 @@ impl Render for Playground {
                                         f32::from(scope.size.width),
                                         f32::from(scope.size.height),
                                         self.last_at
-                                    )),
+                                    ))
+                                    .child(if self.frame_ms > 0. {
+                                        format!(
+                                            " · frame {:.1} ms · ≈{:.0} MB of textures while active",
+                                            self.frame_ms,
+                                            self.texture_megabytes(window)
+                                        )
+                                    } else {
+                                        String::new()
+                                    }),
+                            )
+                            .children(
+                                gpui::glimm_shader_error()
+                                    .map(|error| format!("Shader not applied · {error}"))
+                                    .into_iter()
+                                    .chain(
+                                        self.config_error
+                                            .as_ref()
+                                            .map(|error| format!("Settings not applied · {error}")),
+                                    )
+                                    .map(|problem| {
+                                        div()
+                                            .id(ElementId::Name(problem.clone().into()))
+                                            .w(px(WIDTH))
+                                            .max_h(px(96.))
+                                            .overflow_y_scroll()
+                                            .p_2()
+                                            .rounded(px(6.))
+                                            .bg(rgb(0xfef2f2))
+                                            .text_size(px(11.))
+                                            .text_color(rgb(0xb91c1c))
+                                            .child(problem)
+                                    }),
                             ),
                     )
                     .child(self.settings(cx)),
@@ -1057,7 +1332,8 @@ pub fn run() {
     };
     if args.iter().any(|a| a == "--help") {
         println!(
-            "Native glimm.dev examples\n--demo 0..8 --config file.json --scene-only\n--capture file.png --state initial|busy|final|transition --time milliseconds --gather\n--width px --height px"
+            "Native glimm.dev examples\n--demo 0..8 --config file.json --scene-only\n--debug-view off|mix|displacement|blur|front\n--capture file.png --state initial|busy|final|transition --time milliseconds --gather\n--width px --height px\n\nWhile the window is open, edits to the --config file apply at once, a run in flight included.\n{}=DIR compiles DIR/glimm.metal (.wgsl, .hlsl) instead of the built-in shader and\nagain on every save; a shader that fails to build is reported and the previous one stays.",
+            gpui::GLIMM_SHADER_DIR_ENV
         );
         return;
     }
@@ -1079,11 +1355,10 @@ pub fn run() {
     let height = value("--height")
         .and_then(|v| v.parse().ok())
         .unwrap_or(if scene_only { HEIGHT } else { 820. });
-    let config = value("--config").map(|path| {
-        serde_json::from_str::<serde_json::Value>(
-            &std::fs::read_to_string(path).expect("read config"),
-        )
-        .expect("valid JSON")
+    let config = value("--config").map(PathBuf::from);
+    let debug_view = value("--debug-view").map(|name| {
+        serde_json::from_value::<GlimmDebugView>(serde_json::Value::String(name))
+            .expect("--debug-view off|mix|displacement|blur|front")
     });
     gpui_platform::application().run(move |cx: &mut App| {
         cx.on_window_closed(|cx, _| {
@@ -1107,15 +1382,15 @@ pub fn run() {
             .open_window(options, move |window, cx| {
                 cx.new(|cx| {
                     let mut view = Playground::new(demo, scene_only, inspect, cx);
-                    if let Some(config) = config {
-                        let mut merged = serde_json::to_value(&view.options).unwrap();
-                        for (k, v) in config.as_object().expect("config object") {
-                            merged[k] = v.clone();
-                        }
-                        view.options = serde_json::from_value::<GlimmOptions>(merged)
-                            .expect("Glimm options")
-                            .validated();
+                    if let Some(path) = config {
+                        let text = std::fs::read_to_string(&path).expect("read config");
+                        view.options = merge_config(&view.options, &text).expect("Glimm options");
                         view.element_origin = view.options.at.is_none();
+                        view.config_stamp = modified(&path);
+                        view.config_path = Some(path);
+                    }
+                    if let Some(debug_view) = debug_view {
+                        view.controller.set_debug_view(debug_view, window);
                     }
                     window.focus(&view.focus, cx);
                     view.start_automatic(window, cx);
@@ -1124,6 +1399,23 @@ pub fn run() {
             })
             .expect("open native window");
         cx.activate(true);
+        if capture.is_none() {
+            // Follow the settings file and the shader, if either was asked for; an ordinary run
+            // stops polling after the first look and stays idle.
+            cx.spawn(async move |cx| {
+                loop {
+                    let following =
+                        window.update(cx, |view, window, cx| view.follow_files(window, cx));
+                    if !following.unwrap_or(false) {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(Duration::from_millis(200))
+                        .await;
+                }
+            })
+            .detach();
+        }
         if let Some(path) = capture {
             cx.spawn(async move |cx| {
                 cx.background_executor()
@@ -1206,6 +1498,9 @@ pub fn run() {
                     window.draw(cx).clear(cx);
                     window.render_to_image()
                 });
+                if let Some(error) = gpui::glimm_shader_error() {
+                    eprintln!("glimm shader not applied, built-in shader captured: {error}");
+                }
                 match image {
                     Ok(Ok(image)) => {
                         image.save(&path).expect("write PNG capture");

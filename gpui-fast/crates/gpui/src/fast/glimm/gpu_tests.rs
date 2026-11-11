@@ -4,7 +4,7 @@ use gpui::{
 };
 use std::rc::Rc;
 
-use super::{backend_name, cache_counts, render, renderer};
+use super::{backend_name, cache_counts, follow, render, renderer, shader, solid_green};
 
 fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
     Bounds::new(
@@ -326,4 +326,54 @@ fn glimm_gpu_sibling_scopes_do_not_sample_each_other() {
     assert_eq!(image.get_pixel(100, 120).0, [255, 0, 0, 255]);
     assert_eq!(image.get_pixel(340, 120).0, [0, 255, 0, 255]);
     assert_eq!(image.get_pixel(230, 120).0, [0, 0, 255, 255]);
+}
+#[test]
+fn glimm_gpu_follows_an_edited_shader_and_keeps_the_last_good_one() {
+    let directory = std::env::temp_dir().join(format!(
+        "glimm-follow-{}-{}",
+        backend_name(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("shader");
+    let write = |text: &str, seconds: u64| {
+        std::fs::write(&path, text).unwrap();
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+    };
+    let near = |a: &image::RgbaImage, b: &image::RgbaImage| {
+        a.pixels()
+            .zip(b.pixels())
+            .all(|(a, b)| (0..4).all(|i| a[i].abs_diff(b[i]) <= 1))
+    };
+    let (needle, green) = solid_green();
+    assert!(shader().contains(needle), "the shader no longer has {needle}");
+    let scene = parity_scene();
+    let built_in = render(&mut renderer(), &scene);
+
+    write(shader(), 1_000);
+    let mut renderer = renderer();
+    follow(&mut renderer, path.clone());
+    assert!(near(&render(&mut renderer, &scene), &built_in));
+
+    write(&shader().replace(needle, green), 2_000);
+    let edited = render(&mut renderer, &scene);
+    let centre = edited.get_pixel(256, 160).0;
+    assert!(
+        centre[0] < 8 && centre[1] > 247 && centre[2] < 8,
+        "the edited shader was not compiled: {centre:?}"
+    );
+
+    // A shader that does not build leaves the edited one drawing.
+    write("this does not compile", 3_000);
+    assert!(near(&render(&mut renderer, &scene), &edited));
+
+    write(shader(), 4_000);
+    assert!(near(&render(&mut renderer, &scene), &built_in));
+    std::fs::remove_dir_all(&directory).unwrap();
 }

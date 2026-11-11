@@ -90,6 +90,18 @@ fn cache_counts(renderer: &Renderer) -> (bool, usize, usize) {
 fn backend_name() -> &'static str {
     "directx-warp"
 }
+fn shader() -> &'static str {
+    include_str!("../glimm.hlsl")
+}
+fn solid_green() -> (&'static str, &'static str) {
+    (
+        "float4 result = b + p * (1.0 - b.a);",
+        "float4 result = float4(0, 1, 0, 1);",
+    )
+}
+fn follow(renderer: &mut Renderer, path: std::path::PathBuf) {
+    renderer.glimm.source = Some(gpui::GlimmShaderSource::following(Some(path), shader()));
+}
 
 fn render(renderer: &mut Renderer, scene: &Scene) -> image::RgbaImage {
     let mut state = std::mem::take(&mut renderer.glimm);
