@@ -88,7 +88,7 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 
 Скрипты в корне:
 
-- `export-glimm-scenes.mjs` — измерения оригинального DOM и декоративных ресурсов; нужен Chrome с HTML-in-Canvas. Само нативное приложение от браузера не зависит.
+- `export-glimm-scenes.mjs` — измерения оригинального DOM и декоративных ресурсов; нужен Chrome с HTML-in-Canvas. Само нативное приложение от браузера не зависит. Скрипту нужна локальная копия стилей сайта в `glimm-reference/`; бандлы и стили самого сайта glimm.dev в репозиторий не входят (в `.gitignore`), там лежит только MIT-пакет `glimm`.
 - `smoke-glimm.mjs` — 31 нативный захват: before / after / переход для девяти сцен, gather, Band, пользовательские настройки и полное окно.
 - `compare-glimm-scenes.py` — сравнение с исходными embedded-сценами и проверка неподвижных областей таблицы. Запуск: `uv run --with pillow --with numpy python compare-glimm-scenes.py`.
 - `verify-glimm.mjs` — оригинальный WebGL oracle для общей GPU-тестовой сцены; тот же fixture проверяется в Metal, WGPU и D3D11.

@@ -240,7 +240,10 @@ try {
   const font=await fetch('https://glimm.dev/_next/static/media/Inter_VariableFont-s.p.0oy~rb7-bgeiw.ttf');
   if(!font.ok)throw new Error('font '+font.status);
   await fs.writeFile(path.join(out,'Inter.ttf'),Buffer.from(await font.arrayBuffer()));
-  const stylesheet=await fs.readFile('glimm-reference/0l_0jbw4u0n41.css','utf8');
+  // The site's stylesheet is not kept in the repository; save a copy from glimm.dev here first.
+  const stylesheet=await fs.readFile('glimm-reference/0l_0jbw4u0n41.css','utf8').catch(()=>{
+    throw new Error('glimm-reference/0l_0jbw4u0n41.css is missing: it is a local copy of the glimm.dev stylesheet and is not part of this repository');
+  });
   const spring=stylesheet.match(/__toast\{--spring:linear\(([^)]+)\)/)[1].split(',').map(Number);
   await fs.writeFile(path.join(out,'motion.rs'),`pub const TOAST_SPRING: &[f32] = &[${spring.map(v=>Number.isInteger(v)?v+'.0':v).join(',')}];\n`);
   await fs.writeFile(path.join(out,'images.rs'),`pub const IMAGES: &[(&str, &[u8])] = &[\n${[...decorations.keys()].sort().map(name=>`    ("${name}", include_bytes!("${name}")),`).join('\n')}\n];\n`);

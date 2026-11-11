@@ -26,3 +26,9 @@ __pycache__/
 /glimm-*.txt
 /glimm-ubuntu.sources
 /.claude/worktrees/
+
+# Copies of the glimm.dev site's own bundles, kept locally for reference only: the MIT
+# licence covers the glimm package (glimm-reference/package), not the site.
+/glimm-reference/site/
+/glimm-reference/*-readable.js
+/glimm-reference/*.css
