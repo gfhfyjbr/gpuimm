@@ -1,7 +1,7 @@
 use super::{
-    GlimmController, GlimmDebugView, GlimmDemo, GlimmDirection, GlimmEasing, GlimmOptions,
-    GlimmPalette, GlimmPaletteName, GlimmSample, GlimmShaderSource, GlimmTimeline, GlimmUniforms,
-    ScopePaint, glimm_origin, glimm_scope, glimm_shader_error, uniforms,
+    GlimmController, GlimmDebugView, GlimmDemo, GlimmDirection, GlimmEasing, GlimmEffect,
+    GlimmOptions, GlimmPalette, GlimmPaletteName, GlimmSample, GlimmShaderSource, GlimmTimeline,
+    GlimmUniforms, ScopePaint, glimm_origin, glimm_scope, glimm_shader_error, uniforms,
 };
 use crate::{
     AppContext as _, Bounds, Context, IntoElement, ParentElement as _, Render, Scene, Styled as _,
@@ -226,7 +226,7 @@ fn invalid_user_inputs_cannot_poison_gpu_uniforms() {
         0.,
     );
     assert!(u.0.into_iter().flatten().all(f32::is_finite));
-    assert_eq!(std::mem::size_of::<GlimmUniforms>(), 13 * 16);
+    assert_eq!(std::mem::size_of::<GlimmUniforms>(), 18 * 16);
 }
 #[test]
 fn presets_round_trip_as_customisable_json() {
@@ -430,6 +430,54 @@ fn debug_view_and_retuned_settings_reach_a_paused_frame() {
     })
     .unwrap();
 }
+struct ClippedScope {
+    controller: GlimmController,
+}
+impl Render for ClippedScope {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        glimm_scope(
+            "scope",
+            &self.controller,
+            div().size_full().child(
+                div()
+                    .size(px(120.))
+                    .rounded(px(12.))
+                    .overflow_hidden()
+                    .child("clipped text"),
+            ),
+        )
+    }
+}
+#[test]
+fn a_rounded_clip_in_the_frame_keeps_the_scope_and_its_run() {
+    let mut cx = TestAppContext::single();
+    let window = cx.add_window(|_, _| ClippedScope {
+        controller: GlimmController::new(),
+    });
+    window
+        .update(&mut cx, |view, window, cx| {
+            view.controller.play(GlimmOptions::default(), window, cx);
+            view.controller.seek(300., window);
+        })
+        .unwrap();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        let scene = &window.rendered_frame.scene;
+        // Compiling rounded clips rebuilds the scene; what Glimm recorded has to come along.
+        assert!(
+            scene.fast_rounded_clip.compiled,
+            "no rounded clip to compile"
+        );
+        assert_eq!(scene.fast_glimm.frames.len(), 1);
+        assert_eq!(scene.fast_glimm.scopes.len(), 1);
+        assert_eq!(
+            scene.fast_glimm.frames[0].paint_range,
+            scene.fast_glimm.scopes[0].paint_range
+        );
+        assert!(scene.fast_glimm.frames[0].paint_range.end <= scene.len());
+    })
+    .unwrap();
+}
 struct MarkedScope {
     controller: GlimmController,
 }
@@ -500,4 +548,291 @@ fn a_followed_shader_is_taken_again_only_when_its_file_changes() {
     write("three", 3_000);
     assert_eq!(followed.take_changed().as_deref(), Some("three"));
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+fn radial_presets() -> [GlimmOptions; 3] {
+    [
+        GlimmOptions::emerge(),
+        GlimmOptions::shock(),
+        GlimmOptions::collapse(),
+    ]
+}
+fn scope(w: f32, h: f32) -> Bounds<crate::Pixels> {
+    Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)))
+}
+#[test]
+fn radial_presets_are_within_their_ranges_and_round_trip_as_json() {
+    for (options, effect) in radial_presets().into_iter().zip([
+        GlimmEffect::Emerge,
+        GlimmEffect::Shock,
+        GlimmEffect::Collapse,
+    ]) {
+        assert_eq!(options.effect, effect);
+        assert!(effect.is_radial());
+        assert_eq!(
+            options.clone().validated(),
+            options,
+            "{effect:?} is out of range"
+        );
+        let json = serde_json::to_string(&options).unwrap();
+        assert_eq!(
+            serde_json::from_str::<GlimmOptions>(&json).unwrap(),
+            options
+        );
+    }
+    assert!(!GlimmEffect::Scope.is_radial() && !GlimmEffect::Band.is_radial());
+    // Old settings files, written before these fields existed, still load.
+    let old: GlimmOptions = serde_json::from_str(r#"{"effect":"Shock","sweepMs":700}"#).unwrap();
+    assert_eq!(old.sweep_ms, 700.);
+    assert_eq!(old.amplitude, GlimmOptions::default().amplitude);
+}
+#[test]
+fn radial_settings_are_clamped_before_they_reach_the_gpu() {
+    let wild = GlimmOptions {
+        amplitude: f32::INFINITY,
+        ring_width: 0.,
+        wavelength: -5.,
+        ripples: 100.,
+        echo: f32::NAN,
+        falloff: 0.,
+        chroma: 9.,
+        tint: -1.,
+        stretch_blur: 7.,
+        squeeze: 2.,
+        push: 1.,
+        hold_amount: f32::NEG_INFINITY,
+        hold_radius: 0.,
+        breath_ms: 0.,
+        band_overlay: 3.,
+        ..GlimmOptions::emerge()
+    }
+    .validated();
+    let defaults = GlimmOptions::default();
+    assert_eq!(wild.amplitude, defaults.amplitude);
+    assert_eq!(wild.ring_width, 4.);
+    assert_eq!(wild.wavelength, 8.);
+    assert_eq!(wild.ripples, 6.);
+    assert_eq!(wild.echo, 0.);
+    assert_eq!(wild.falloff, 16.);
+    assert_eq!(wild.chroma, 2.);
+    assert_eq!(wild.tint, 0.);
+    assert_eq!(wild.stretch_blur, 2.);
+    assert_eq!(wild.squeeze, 1.);
+    assert_eq!(wild.push, 0.9);
+    assert_eq!(wild.hold_amount, defaults.hold_amount);
+    assert_eq!(wild.hold_radius, 8.);
+    assert_eq!(wild.breath_ms, 200.);
+    assert_eq!(wild.band_overlay, 1.5);
+    for at in [[0., 0.], [-3000., 50.], [1e9, f32::NAN]] {
+        let options = GlimmOptions {
+            at: Some(at),
+            intensity: 4.,
+            ..wild.clone()
+        }
+        .validated();
+        for t in [0., 300., 2000.] {
+            let sample = GlimmTimeline::new(options.clone(), false).sample(t);
+            let u = uniforms(&options, sample, scope(400., 300.), 2., false, 9.);
+            assert!(
+                u.0.into_iter().flatten().all(f32::is_finite),
+                "{at:?} at {t}ms"
+            );
+        }
+    }
+}
+#[test]
+fn radial_timelines_run_the_front_out_spend_the_wave_and_end() {
+    for options in radial_presets() {
+        let effect = options.effect;
+        let timeline = GlimmTimeline::new(options.clone(), false);
+        let end = timeline.end_ms().unwrap();
+        assert_eq!(end, options.sweep_ms, "{effect:?}");
+        let start = timeline.sample(0.);
+        assert!(start.active && start.burst, "{effect:?}");
+        close(start.progress, 0.);
+        close(start.strength, 0.);
+        let mut last_progress = 0.;
+        let mut peak = 0f32;
+        for step in 1..20 {
+            let t = end * step as f32 / 20.;
+            let sample = timeline.sample(t);
+            assert!(sample.active, "{effect:?} ended early at {t}");
+            assert!(
+                sample.progress >= last_progress,
+                "{effect:?} front went back at {t}"
+            );
+            last_progress = sample.progress;
+            if t > 200. {
+                assert!(
+                    sample.strength <= peak + 1e-6,
+                    "{effect:?} gained energy at {t}"
+                );
+            }
+            peak = peak.max(sample.strength);
+        }
+        assert!(peak > 0.5, "{effect:?} never had much energy: {peak}");
+        let done = timeline.sample(end);
+        assert!(!done.active, "{effect:?}");
+        close(done.progress, 1.);
+        close(done.strength, 0.);
+        close(done.gather, 0.);
+        // A pure function of time: seeking back gives the same instant.
+        assert_eq!(timeline.sample(333.), timeline.sample(333.));
+        assert!(timeline.sample(90.).midpoint && !timeline.sample(89.).midpoint);
+    }
+}
+#[test]
+fn a_held_radial_run_breathes_until_resolved_then_lets_go_into_the_effect() {
+    let options = GlimmOptions::shock();
+    let mut timeline = GlimmTimeline::new(options.clone(), true);
+    assert_eq!(timeline.end_ms(), None);
+    close(timeline.sample(options.gather_ms).gather, 1.);
+    let held = timeline.sample(5000.);
+    assert!(held.active && !held.burst);
+    close(held.gather, 1.);
+    close(held.progress, 0.);
+    close(held.breath, (5000. / options.breath_ms).fract());
+    assert!(timeline.resolve(5000.));
+    assert_eq!(timeline.end_ms(), Some(5000. + options.sweep_ms));
+    // No snap: the front starts at once, while the hold lets go over 260ms.
+    let released = timeline.sample(5000.);
+    assert!(released.burst);
+    close(released.gather, 1.);
+    assert!(timeline.sample(5130.).gather < 1. && timeline.sample(5130.).gather > 0.);
+    close(timeline.sample(5260.).gather, 0.);
+    assert!(timeline.sample(5300.).progress > 0.);
+    assert!(!timeline.sample(5000. + options.sweep_ms).active);
+
+    let mut cancelled = GlimmTimeline::new(options, true);
+    cancelled.cancel(1000.);
+    assert!(!cancelled.resolve(1100.));
+    assert!(cancelled.sample(1160.).gather < 1.);
+    assert!(!cancelled.sample(1320.).active);
+
+    let mut fast = GlimmTimeline::new(GlimmOptions::emerge(), false);
+    fast.fast_forward(200.);
+    assert_eq!(fast.end_ms(), Some(360.));
+    assert!(!fast.sample(360.).active);
+}
+#[test]
+fn radial_uniforms_place_the_front_around_the_point_and_leave_glimm_dev_rows_alone() {
+    let bounds = scope(400., 300.);
+    // The glimm.dev paths keep rows 13 to 17 empty, so their shaders are untouched.
+    for options in [GlimmOptions::default(), GlimmOptions::band()] {
+        let sample = GlimmTimeline::new(options.clone(), false).sample(400.);
+        let u = uniforms(&options, sample, bounds, 1., false, 0.);
+        assert!(u.0[13..].iter().flatten().all(|v| *v == 0.));
+    }
+    let options = GlimmOptions {
+        at: Some([100., 150.]),
+        ..GlimmOptions::emerge()
+    };
+    let sample = GlimmSample {
+        progress: 0.5,
+        strength: 0.8,
+        gather: 0.25,
+        breath: 0.75,
+        active: true,
+        burst: true,
+        ..GlimmSample::default()
+    };
+    let u = uniforms(&options, sample, bounds, 2., false, 0.).0;
+    let cover = 300f32.hypot(150.);
+    let reach = cover + 2. * options.ring_width + options.ripples * options.wavelength;
+    assert_eq!(u[2][0..2], [100., 150.]);
+    assert_eq!(
+        u[13],
+        [1., reach * 0.5, options.ring_width, options.amplitude * 0.8]
+    );
+    assert_eq!(
+        u[14],
+        [
+            options.wavelength,
+            options.ripples * options.wavelength,
+            options.falloff,
+            0.
+        ]
+    );
+    assert_eq!(
+        u[15],
+        [
+            options.chroma,
+            options.tint,
+            options.stretch_blur,
+            options.squeeze
+        ]
+    );
+    assert_eq!(
+        u[16],
+        [
+            0.25 * options.hold_amount,
+            0.75,
+            options.hold_radius,
+            options.push
+        ]
+    );
+    assert_eq!(u[17], [0.8, 0., 0.5, cover]);
+
+    // From a point outside the scope the front starts just short of the scope.
+    let outside = GlimmOptions {
+        at: Some([-120., 150.]),
+        ..GlimmOptions::emerge()
+    };
+    let at_start = GlimmSample::default();
+    let u = uniforms(&outside, at_start, bounds, 1., false, 0.).0;
+    close(u[13][1], 120. - outside.ring_width);
+
+    // Collapse runs inward and pulls; Shock neither squeezes nor pushes, and has the echo.
+    let collapse = GlimmOptions {
+        at: Some([200., 150.]),
+        ..GlimmOptions::collapse()
+    };
+    let u = uniforms(&collapse, at_start, bounds, 1., false, 0.).0;
+    close(u[13][0], 3.);
+    close(u[13][1], 200f32.hypot(150.) + collapse.ring_width);
+    close(u[16][3], -collapse.push);
+    let shock = GlimmOptions::shock();
+    let u = uniforms(&shock, sample, bounds, 1., false, 0.).0;
+    close(u[13][0], 2.);
+    close(u[14][3], shock.echo);
+    close(u[15][3], 0.);
+    close(u[16][3], 0.);
+    // Intensity scales the wave, the squeeze and the push, within their limits.
+    let strong = GlimmOptions {
+        intensity: 4.,
+        ..GlimmOptions::emerge()
+    };
+    let u = uniforms(&strong, sample, bounds, 1., false, 0.).0;
+    close(u[13][3], strong.amplitude * 4. * 0.8);
+    close(u[15][3], 1.);
+    close(u[16][3], 0.9);
+}
+#[test]
+fn a_radial_run_reaches_the_frame_with_its_rows() {
+    let mut cx = TestAppContext::single();
+    let window = cx.add_window(|_, _| TestScope {
+        controller: GlimmController::new(),
+    });
+    window
+        .update(&mut cx, |view, window, cx| {
+            let options = GlimmOptions {
+                at: Some([-30., 20.]),
+                ..GlimmOptions::emerge()
+            };
+            view.controller.play(options, window, cx);
+            view.controller.seek(400., window);
+            assert_eq!(
+                view.controller.end_ms(),
+                Some(GlimmOptions::emerge().sweep_ms)
+            );
+        })
+        .unwrap();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+        let u = window.rendered_frame.scene.fast_glimm.frames[0].uniforms.0;
+        assert_eq!(u[13][0], 1.);
+        assert!(u[13][1] > 0. && u[13][3] > 0.);
+        assert_eq!(u[2][0..2], [-30., 20.]);
+    })
+    .unwrap();
 }

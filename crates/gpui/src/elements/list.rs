@@ -31,15 +31,17 @@ pub fn list(
         render_item: crate::fast::layers::lists::spanned_render_item(render_item),
         style: StyleRefinement::default(),
         sizing_behavior: ListSizingBehavior::default(),
+        fast_smooth_scroll: crate::fast::smooth_scroll::ElementChoice::default(),
     }
 }
 
 /// A list element
 pub struct List {
-    state: ListState,
+    pub(crate) state: ListState,
     render_item: Box<RenderItemFn>,
     style: StyleRefinement,
     sizing_behavior: ListSizingBehavior,
+    pub(crate) fast_smooth_scroll: crate::fast::smooth_scroll::ElementChoice,
 }
 
 impl List {
@@ -67,7 +69,7 @@ pub(crate) struct StateInner {
     pub(crate) scroll_anchor: Option<ScrollAnchor>,
     alignment: ListAlignment,
     overdraw: Pixels,
-    reset: bool,
+    pub(crate) reset: bool,
     #[allow(clippy::type_complexity)]
     scroll_handler: Option<Box<dyn FnMut(&ListScrollEvent, &mut Window, &mut App)>>,
     scrollbar_drag_start_height: Option<Pixels>,
@@ -304,7 +306,7 @@ pub(crate) struct ListItemSummary {
 pub(crate) struct Count(pub(crate) usize);
 
 #[derive(Clone, Debug, Default)]
-struct Height(Pixels);
+pub(crate) struct Height(pub(crate) Pixels);
 
 impl ListState {
     /// Construct a new list state, for storage on a view.
@@ -885,7 +887,7 @@ impl StateInner {
         scroll_top.item_ix..cursor.start().count + 1
     }
 
-    fn scroll(
+    pub(crate) fn scroll(
         &mut self,
         scroll_top: &ListOffset,
         height: Pixels,
@@ -1705,8 +1707,12 @@ impl Element for List {
         let scroll_top = prepaint.layout.scroll_top;
         let hitbox_id = prepaint.hitbox.id;
         let mut accumulated_scroll_delta = ScrollDelta::default();
+        let fast_glide = crate::fast::smooth_scroll::ListWheel::painted(self, window);
         window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && hitbox_id.should_handle_scroll(window) {
+                if crate::fast::smooth_scroll::ListWheel::wheel(&fast_glide, event, window, cx) {
+                    return;
+                }
                 accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);
                 let pixel_delta = accumulated_scroll_delta.pixel_delta(px(20.));
                 list_state.0.borrow_mut().scroll(

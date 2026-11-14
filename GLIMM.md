@@ -67,6 +67,8 @@ Windows (PowerShell, установленный Rust и Windows SDK):
 - **Ползунок времени** под превью: клик или перетаскивание ставит эффект на паузу в нужном моменте, стрелки шагают по одному кадру, с Shift — по 100 мс.
 - **Настройки из `--config` перечитываются на лету**, включая уже идущий или поставленный на паузу эффект.
 
+**Радиальные искажения.** `GlimmEffect::Emerge`, `Shock` и `Collapse` (пресеты `GlimmOptions::emerge()`, `shock()`, `collapse()`) гнут само содержимое вокруг точки действия `at`, которая может лежать и вне scope; `anticipate` с ними держит «дышащую» линзу до `resolve`. Стенд с сеткой, текстом и карточками: `./run-glimm.sh --distort spawn` (а также `emerge`, `shock`, `collapse`, `hold`), полоса из восьми кадров в скрытом окне: `--distort shock --strip 8 --capture strip.png`. Параметры, пример с двумя scope и стоимость — раздел «Radial distortions» в [`docs/glimm.md`](docs/glimm.md).
+
 В коде: `controller.transition(...)` и `resolve_with(...)` не дают перепутать порядок «снять кадр → изменить состояние», `glimm_origin(...)` + `controller.marked_point()` дают точку действия по реальному положению элемента. Подробности — раздел «Development loop» в [`docs/glimm.md`](docs/glimm.md).
 
 Проверено на macOS (Metal), тестами WGPU на macOS и в Windows-VM (Direct3D 11 WARP, 13 из 13 GPU-тестов, включая перезагрузку шейдера). На Linux новый тест не перезапускался.

@@ -238,7 +238,12 @@ pub(crate) fn path_cache_stats() -> PathCacheStats {
 
 /// Builds `builder` as [`PathBuilder::build`] does, from triangles kept from
 /// an earlier path of the same shape where there is one.
-#[inline]
+// Never inlined: this reads the thread's kept shapes, and code inlined into
+// another crate is compiled again into a hot patch of that crate, where a
+// thread-local is not this one. An app patched while it ran crashed here
+// (`KeptPaths::insert` on what the patch took for the kept shapes) the
+// first time its patched code built a path.
+#[inline(never)]
 pub(crate) fn build(builder: PathBuilder) -> Result<Path<Pixels>, Error> {
     let path = match builder.transform {
         Some(transform) => builder.raw.build().transformed(&transform),

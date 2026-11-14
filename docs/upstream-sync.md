@@ -257,6 +257,18 @@ No application-specific timeline policy belongs here.
   never emit these references or allocate effect targets. See [glimm.md](glimm.md)
   for the supported backend, behavior and limitations.
 
+- Smooth scrolling, asked for by the app this fork is built for: a wheel's
+  line steps glide to where they lead in every scroll container (`div`
+  scrolling, `uniform_list`, `list`) instead of jumping. `gpui` exports
+  `SmoothScroll`, a `Global` the app sets to turn it off or change how long a
+  glide takes (on by default, off while `App::reduce_motion` is set), and
+  `ScrollGlide`, the glide itself, for views that scroll their own content
+  (a terminal) to feel the same. `Div`, `Stateful<E>`, `UniformList` and
+  `List` gain `smooth_scroll(bool)`, for one container to opt out. Precise
+  (trackpad) deltas and offsets that code sets are applied at once, as
+  upstream applies them; without a wheel that scrolls in lines nothing
+  changes. It all lives in `fast::smooth_scroll`.
+
 When the check fails, move the change into a `fast/` module and leave a hook
 behind that names it; use `git diff <import_commit> -- <file>` to see what
 differs.

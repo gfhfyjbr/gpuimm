@@ -97,6 +97,79 @@ controller.resolve_with(token, window, cx, |_, cx| {
 
 `glimm_origin(&controller, element)` wraps the element an effect starts from. It changes neither layout nor painting; it records where the element was laid out, and `controller.marked_point()` returns its centre in scope coordinates, ready for `options.at`. The marker may be inside or outside the scope.
 
+## Radial distortions
+
+Besides glimm.dev's two paths, `GlimmEffect` has three effects of this fork that bend the scope's content around a point of action instead of sweeping across it. The point is `options.at` in scope pixels (or `origin` and `origin_offset`), and it may lie outside the scope: a front then starts just short of the scope's nearest edge, so no part of the run is spent where nothing shows.
+
+| Effect | Preset | What it does |
+| --- | --- | --- |
+| `Emerge` | `GlimmOptions::emerge()` | New content comes out of the point through a membrane. Inside a growing bubble it is squeezed toward the point (the content out to the scope's edge is pulled in, most at the rim) and blurred as much as it is squeezed; it relaxes as the front passes, overshoots and settles. At the rim it refracts and splits into colours. The old content ahead of the rim is pushed aside and bent around it. |
+| `Shock` | `GlimmOptions::shock()` | No change of content: a raised ring of refraction runs out from the point, ripples trail it and a weaker echo ring follows at six tenths of its radius, all weakening with distance. It draws what the scope holds now, never the snapshot. |
+| `Collapse` | `GlimmOptions::collapse()` | The reverse of Emerge: a front closes in on the point, the old content inside it is squeezed into the point and gone, and what replaces it is pulled in after it. |
+
+**Hold.** `anticipate` with any of the three holds a breathing lens around the point while the work runs: content is drawn toward the point, deeper on each in-breath, with a ripple leaving the point once a breath. `resolve` releases it straight into the effect (the lens lets go over 260ms while the front starts); `cancel` lets it relax over 320ms. While it holds, the run has no end (`end_ms()` is `None`), as for glimm.dev's gather.
+
+The palette lives in the refracted light, not over it: where the front bends content, its colours separate along the ray, weighted from red to blue or, as `tint` rises, through the palette; and the front's leading edge carries a thin rim of the palette that brightens where it refracts bright content. Both scale with the wave's energy, which is spent by the end, so the last frame is the content exactly. The iridescent band remains available as an optional layer, drawn as a ring on the front: `band_overlay`.
+
+A node that crawls out of its parent while the canvas around it ripples uses two scopes, the canvas's and the node's own, nested in it:
+
+```rust
+// On the canvas view: one controller for the board, one per node, kept across frames.
+fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    glimm_scope("board", &self.board_fx, div().size_full().children(self.nodes.iter().map(|node| {
+        // The node's scope is the node plus a margin the wave can use.
+        glimm_scope(("node", node.id), &node.fx, node_view(node).p(px(48.)))
+    })))
+}
+
+// The parent's agent starts creating a node: the board holds around the parent's edge.
+let edge = parent_bounds.right_center(); // window coordinates
+self.pending = Some(self.board_fx.anticipate(
+    GlimmOptions { at: Some(self.board_fx.local_point(edge)), ..GlimmOptions::shock() },
+    window,
+    cx,
+));
+
+// The node exists: release the hold into the ripple and pull the node out of the edge.
+if let Some(token) = self.pending.take()
+    && self.board_fx.resolve(token, window, cx)
+{
+    let fx = GlimmController::new();
+    // The node's scope has not been laid out yet, so the point comes from where it will be.
+    // It is outside the node's scope, on the parent's edge.
+    let at = [f32::from(edge.x - node_origin.x), f32::from(edge.y - node_origin.y)];
+    fx.play(GlimmOptions { at: Some(at), ..GlimmOptions::emerge() }, window, cx);
+    self.nodes.push(Node { id, fx, .. }); // commit after play: its snapshot is the empty scope
+    cx.notify();
+}
+```
+
+`play` on a scope that has never been painted captures nothing, which is what an emerging node's old content is. For a node that leaves, keep its scope mounted, with the node still laid out and its content replaced by nothing, until `end_ms()` has passed, and play `GlimmOptions::collapse()` on it.
+
+| Field | Range | Emerge / Shock / Collapse | Meaning |
+| --- | --- | --- | --- |
+| `amplitude` | 0..96 px | 18 / 14 / 18 | How far the front's refraction moves content, times `intensity`. The ring widens to at least 3.3 × amplitude so it never folds content over itself. |
+| `ringWidth` | 4..600 px | 44 / 36 / 44 | Width of the wavefront ring; also the reach of Emerge's push and the old/new seam's width. |
+| `wavelength` | 8..600 px | 60 / 48 / 60 | Spacing of the ripples trailing the front; their height is capped at a tenth of it. |
+| `ripples` | 0..6 | 2.5 / 1.2 / 2.5 | Length of the trailing ripple train, in wavelengths. |
+| `echo` | 0..1 | 0 / 0.45 / 0 | Shock only: strength of the second ring at six tenths of the first's radius. |
+| `falloff` | 16..100000 px | 900 / 1000 / 900 | Distance from the point at which the wave has half its strength. |
+| `chroma` | 0..2 | 0.6 | How far the refracted colours separate, relative to the refraction. |
+| `tint` | 0..1 | 0.45 | How much the palette colours the separated light and the rim; 0 is uncoloured refraction. |
+| `stretchBlur` | 0..2 | 1 | Blur per unit of stretch: squeezed content softens through the mipmaps, stretched content smears along the ray. |
+| `squeeze` | 0..1 | 0.7 / – / 0.85 | Emerge and Collapse: share of the content's distance to the scope's edge pulled into the bubble. |
+| `push` | 0..0.9 | 0.4 / – / 0.3 | Emerge pushes the content outside the front aside, Collapse pulls it in after it. |
+| `holdAmount` | 0..2 | 1 | Strength of the breathing lens while `anticipate` waits. |
+| `holdRadius` | 8..2000 px | 90 | Radius of the breathing lens. |
+| `breathMs` | 200..10000 | 1400 | One breath. |
+| `bandOverlay` | 0..1.5 | 0 | Opacity of the optional iridescent band ring on the front. |
+
+The radial effects also use `sweepMs` (the run's length: 1150 / 1200 / 950), `easing` (the front's travel; the presets use gentle cubic Béziers), `gatherMs` (how long the hold takes to build), `intensity` (scales amplitude, squeeze, push and hold within their limits), `palette`, `hueShift`, `brightness` and `feather` (displacement fades out over it at the scope's edges, at least 6px, so the edge's pixels are never repeated). The glimm.dev sweep settings (`direction`, `curve`, `span`, `bandTight`, `fade`, `peakAlpha`, wave and ripple amounts, `swellAmount`, `pageEffect`) do not apply. The timelines are pure functions of elapsed time like the others: `seek` reproduces any instant, `fast_forward` finishes in 160ms, `take_midpoint` fires 90ms after the front starts.
+
+**Cost.** A pixel samples the scope's textures once where nothing bends, and five times along the ray where the content is refracted or stretched by more than a third of a pixel (dispersion and smear share those taps; squeeze blur comes from the mipmaps at no extra taps). On the seam between old and new content of Emerge and Collapse, a band about 0.6 ring widths wide, both layers are sampled: ten taps, the worst case. glimm.dev's scope takes up to 36 there (16-tap blur on each layer plus the colour split). The rest is arithmetic: a few exponentials and a sine per evaluation of the wave, evaluated twice per layer to measure the stretch.
+
+**Playground.** `--distort emerge|shock|collapse|hold|spawn` opens a stage with a grid, text and two cards in place of the nine examples: `spawn` is the two-scope setup above, `hold` breathes around a busy node and releases into a shock, `--full` runs Emerge or Collapse on the whole stage. With `--capture file.png` it renders in a hidden window: `--time ms` for one instant, `--strip 8` for eight instants across the run tiled into one image, `--debug-view` and `--config` as for the examples, `--width`/`--height` for the stage. `make dev ARGS="--distort spawn"` follows the shader file while the stage plays.
+
 ## Development loop
 
 These aids are for building new effects; none of them changes a frame unless asked to.

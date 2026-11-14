@@ -66,15 +66,34 @@ pub(crate) fn note_wheel(window: &mut Window, cx: &mut App) {
 }
 
 /// Whether hover is held still: a wheel event came less than
-/// [`HOVER_FREEZE`] ago, and the pointer has not moved since.
+/// [`HOVER_FREEZE`] ago, or the glide it started is still moving content
+/// under the pointer (see [`crate::fast::smooth_scroll`]), and the pointer
+/// has not moved since.
 pub(crate) fn frozen(window: &Window) -> bool {
     window
         .fast_layers
         .hover_freeze
         .last_wheel
         .is_some_and(|(at, position)| {
-            at.elapsed() < HOVER_FREEZE && position == window.mouse_position
+            position == window.mouse_position
+                && (at.elapsed() < HOVER_FREEZE || crate::fast::smooth_scroll::gliding(window))
         })
+}
+
+/// Draws the window again when the last glide has ended after hover was held
+/// still for longer than [`HOVER_FREEZE`] only because of it: the wheel
+/// event's own redraw found hover still held.
+pub(crate) fn glides_ended(window: &mut Window) {
+    let held_by_glide = window
+        .fast_layers
+        .hover_freeze
+        .last_wheel
+        .is_some_and(|(at, position)| {
+            at.elapsed() >= HOVER_FREEZE && position == window.mouse_position
+        });
+    if held_by_glide {
+        window.refresh();
+    }
 }
 
 /// Whether hover reads as nothing for a hitbox the pointer has not captured,

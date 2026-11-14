@@ -110,6 +110,8 @@ pub(crate) fn compile(scene: &mut Scene) {
     compiled.fast_rounded_clip = mem::take(&mut scene.fast_rounded_clip);
     compiled.fast_rounded_clip.compiled = true;
     compiled.sort_scratch = mem::take(&mut scene.sort_scratch);
+    // Glimm scopes and frames index `paint_operations`, which are kept as painted.
+    compiled.fast_glimm = mem::take(&mut scene.fast_glimm);
     *scene = compiled;
 }
 

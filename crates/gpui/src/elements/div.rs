@@ -2218,6 +2218,7 @@ pub struct Interactivity {
     pub(crate) scroll_anchor: crate::fast::interactivity::Rare<ScrollAnchor>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) ongoing_scroll: Option<Rc<RefCell<OngoingScroll>>>,
+    pub(crate) fast_smooth_scroll: crate::fast::smooth_scroll::ElementChoice,
     pub(crate) group: Option<SharedString>,
     /// The base style of the element, before any modifications are applied
     /// by focus, active, etc.
@@ -3438,6 +3439,8 @@ impl Interactivity {
             let current_view = window.current_view();
             let subtrees = crate::fast::retained::enclosing_retained_subtrees(window);
             let fast_container = crate::fast::layers::invalidate::painted_container(window, self);
+            let fast_glide =
+                crate::fast::smooth_scroll::ContainerWheel::painted(self, &scroll_offset);
             window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                     let mut scroll_offset = scroll_offset.borrow_mut();
@@ -3478,10 +3481,14 @@ impl Interactivity {
                             delta_x = Pixels::ZERO;
                         }
                     }
-                    if !crate::fast::layers::wheel::moves(
+                    if !crate::fast::smooth_scroll::ContainerWheel::wheel(
+                        &fast_glide,
+                        event,
                         old_scroll_offset,
-                        point(delta_x, delta_y),
-                        fast_scroll_max,
+                        (&mut delta_x, &mut delta_y),
+                        (fast_scroll_max, &subtrees, &fast_container, current_view),
+                        window,
+                        cx,
                     ) {
                         return;
                     }

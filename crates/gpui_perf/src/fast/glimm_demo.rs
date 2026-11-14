@@ -1,4 +1,6 @@
 //! The nine glimm.dev examples, rendered natively by GPUI and the Metal Glimm compositor.
+#[path = "glimm_distort.rs"]
+mod distort;
 #[path = "glimm_motion.rs"]
 mod motion;
 #[path = "glimm_scenes.rs"]
@@ -1332,9 +1334,14 @@ pub fn run() {
     };
     if args.iter().any(|a| a == "--help") {
         println!(
-            "Native glimm.dev examples\n--demo 0..8 --config file.json --scene-only\n--debug-view off|mix|displacement|blur|front\n--capture file.png --state initial|busy|final|transition --time milliseconds --gather\n--width px --height px\n\nWhile the window is open, edits to the --config file apply at once, a run in flight included.\n{}=DIR compiles DIR/glimm.metal (.wgsl, .hlsl) instead of the built-in shader and\nagain on every save; a shader that fails to build is reported and the previous one stays.",
+            "Native glimm.dev examples\n--demo 0..8 --config file.json --scene-only\n--debug-view off|mix|displacement|blur|front\n--capture file.png --state initial|busy|final|transition --time milliseconds --gather\n--width px --height px\n\nRadial distortions on a grid, text and cards, in a hidden window when capturing:\n--distort emerge|shock|collapse|hold|spawn [--full] [--time ms | --strip frames]\n          [--capture file.png] [--debug-view view] [--config file.json] [--width px --height px]\n\nWhile the window is open, edits to the --config file apply at once, a run in flight included.\n{}=DIR compiles DIR/glimm.metal (.wgsl, .hlsl) instead of the built-in shader and\nagain on every save; a shader that fails to build is reported and the previous one stays.",
             gpui::GLIMM_SHADER_DIR_ENV
         );
+        return;
+    }
+    if let Some(name) = value("--distort") {
+        let demo = distort::Demo::parse(&name).expect("--distort emerge|shock|collapse|hold|spawn");
+        distort::run(demo, &args);
         return;
     }
     let demo = GlimmDemo::ALL[value("--demo")
