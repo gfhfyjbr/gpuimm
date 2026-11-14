@@ -63,6 +63,8 @@ pub(crate) struct WindowLayers {
     pub(crate) wheel: wheel::WheelDispatch,
     /// When the last wheel event came, for hover to be held still a while.
     pub(crate) hover_freeze: hover_freeze::HoverFreeze,
+    /// The wheel's glides under way. See [`crate::fast::smooth_scroll`].
+    pub(crate) glides: crate::fast::smooth_scroll::Glides,
 }
 
 impl Default for WindowLayers {
@@ -80,6 +82,7 @@ impl Default for WindowLayers {
             window_size: None,
             wheel: wheel::WheelDispatch::default(),
             hover_freeze: hover_freeze::HoverFreeze::default(),
+            glides: crate::fast::smooth_scroll::Glides::default(),
         }
     }
 }
