@@ -507,11 +507,31 @@ impl Element for GlimmOrigin {
 
 /// The palette's first row carries the debug view in its unused fourth component.
 const DEBUG_ROW: usize = 9;
+/// Rows 0 to 12 are glimm.dev's; 13 to 17 drive the radial effects and stay zero otherwise.
+const ROWS: usize = 18;
 /// Renderer wire format. Every row matches a Metal `float4`; no implicit padding.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
-pub struct GlimmUniforms(pub [[f32; 4]; 13]);
+pub struct GlimmUniforms(pub [[f32; 4]; ROWS]);
+impl GlimmUniforms {
+    /// What a scope of `size` logical pixels at the window's origin draws with for `sample`,
+    /// for renderer tests that drive the shaders through the real settings and timeline.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_scope(
+        options: &GlimmOptions,
+        sample: GlimmSample,
+        size: [f32; 2],
+        dpr: f32,
+    ) -> Self {
+        let options = options.clone().validated();
+        let bounds = Bounds::new(
+            crate::point(crate::px(0.), crate::px(0.)),
+            crate::size(crate::px(size[0]), crate::px(size[1])),
+        );
+        uniforms(&options, sample, bounds, dpr, false, 0.)
+    }
+}
 /// A scope's prepared paint operation, consumed by the platform renderer.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -572,7 +592,8 @@ fn uniforms(
     let feather = o
         .feather
         .unwrap_or_else(|| if full { 0. } else { 24f32.min(0.15 * w.min(h)) });
-    GlimmUniforms([
+    let mut rows = [[0.; 4]; ROWS];
+    rows[..13].copy_from_slice(&[
         [w, h, dpr, time],
         [
             f32::from(bounds.origin.x) * dpr,
@@ -610,7 +631,79 @@ fn uniforms(
         [o.palette.b[0], o.palette.b[1], o.palette.b[2], 0.],
         [o.palette.c[0], o.palette.c[1], o.palette.c[2], 0.],
         [o.palette.d[0], o.palette.d[1], o.palette.d[2], 0.],
-    ])
+    ]);
+    if o.effect.is_radial() {
+        rows[13..].copy_from_slice(&radial_rows(o, s, [w, h], origin));
+    }
+    GlimmUniforms(rows)
+}
+
+/// Rows 13 to 17 for a radial effect around `at`, all lengths in logical pixels:
+///
+/// 13. mode, front radius, ring width, refraction amplitude
+/// 14. ripple wavelength, ripple train length, falloff distance, echo strength
+/// 15. chroma, tint, stretch blur, squeeze
+/// 16. hold lens strength, breath phase, hold radius, push (negative pulls)
+/// 17. wave energy, band overlay opacity, front progress, distance to the farthest corner
+fn radial_rows(o: &GlimmOptions, s: GlimmSample, [w, h]: [f32; 2], at: [f32; 2]) -> [[f32; 4]; 5] {
+    let cover = [[0., 0.], [w, 0.], [0., h], [w, h]]
+        .into_iter()
+        .map(|[x, y]| (x - at[0]).hypot(y - at[1]))
+        .fold(0., f32::max);
+    // From a point outside the scope the front starts just short of the scope's nearest edge,
+    // so no part of the run is spent where nothing can be seen.
+    let nearest = (0f32.max(-at[0]).max(at[0] - w)).hypot(0f32.max(-at[1]).max(at[1] - h));
+    let start = (nearest - o.ring_width).max(0.);
+    // An outward front travels until its crest and the ripples behind it have left the
+    // farthest corner; an inward one starts just beyond that corner.
+    let radius = if o.effect == GlimmEffect::Collapse {
+        start + (cover + o.ring_width - start) * (1. - s.progress)
+    } else {
+        let reach = cover + 2. * o.ring_width + o.ripples * o.wavelength;
+        start + (reach - start) * s.progress
+    };
+    let push = (o.push * o.intensity).min(0.9);
+    [
+        [
+            o.effect.mode(),
+            radius,
+            o.ring_width,
+            o.amplitude * o.intensity * s.strength,
+        ],
+        [
+            o.wavelength,
+            o.ripples * o.wavelength,
+            o.falloff,
+            if o.effect == GlimmEffect::Shock {
+                o.echo
+            } else {
+                0.
+            },
+        ],
+        [
+            o.chroma,
+            o.tint,
+            o.stretch_blur,
+            if o.effect == GlimmEffect::Shock {
+                0.
+            } else {
+                (o.squeeze * o.intensity).min(1.)
+            },
+        ],
+        [
+            (s.gather * o.hold_amount * o.intensity).min(4.),
+            s.breath,
+            o.hold_radius,
+            if o.effect == GlimmEffect::Collapse {
+                -push
+            } else if o.effect == GlimmEffect::Shock {
+                0.
+            } else {
+                push
+            },
+        ],
+        [s.strength, o.band_overlay * s.strength, s.progress, cover],
+    ]
 }
 
 pub(crate) fn clear(scene: &mut Scene) {

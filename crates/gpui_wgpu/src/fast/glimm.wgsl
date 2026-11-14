@@ -1,5 +1,5 @@
 // glimm 0.4.1 shader.ts and GlimmScope FS2, MIT; see docs/GLIMM-LICENSE.
-struct GlimmUniforms { v: array<vec4<f32>, 13>, }
+struct GlimmUniforms { v: array<vec4<f32>, 18>, }
 @group(0) @binding(0) var<uniform> u: GlimmUniforms;
 @group(0) @binding(1) var live: texture_2d<f32>;
 @group(0) @binding(2) var old: texture_2d<f32>;
@@ -141,8 +141,187 @@ fn band(px: vec2<f32>) -> vec4<f32> {
     if u.v[7].z > 0.0 { feather = smoothstep(0.0, u.v[7].z, min(edges.x, edges.y)); }
     return vec4(col * body_a + emit, min(body_a + high_a, 1.0)) * feather;
 }
+// Radial distortions: Emerge (mode 1), Shock (2), Collapse (3). Rows 13 to 17 are described at
+// radial_rows in crates/gpui/src/fast/glimm/mod.rs; lengths are logical pixels. Every function
+// returns a radius along the ray from the point of action: content at that radius shows here.
+
+// The travelling wave: a raised ring at the front that magnifies what lies under it, ripples
+// trailing behind it, and for Shock an echo ring at six tenths of its radius. The ring widens
+// with its amplitude and the ripples are capped by their wavelength, so neither folds the
+// content over itself.
+fn wave_at(r: f32) -> f32 {
+    let radius = u.v[13].y;
+    let amplitude = u.v[13].w;
+    if amplitude <= 0.0 { return 0.0; }
+    let width = max(u.v[13].z, 3.3 * amplitude);
+    let wavelength = u.v[14].x;
+    let train = u.v[14].y;
+    let falloff = u.v[14].z;
+    let echo = u.v[14].w;
+    let x = (r - radius) / width;
+    let lens = -2.3316 * x * exp(-x * x);
+    let behind = max((radius - r) * select(1.0, -1.0, u.v[13].x > 2.5), 0.0);
+    var ripples = 0.0;
+    if train > 0.0 {
+        ripples = sin(6.28318 * behind / wavelength) * exp(-behind / train) * smoothstep(0.0, 0.5 * width, behind);
+    }
+    let e = (r - 0.6 * radius) / width;
+    let second = echo * -2.3316 * e * exp(-e * e);
+    return (amplitude * (lens + second) + min(0.6 * amplitude, 0.1 * wavelength) * ripples) * falloff / (falloff + r);
+}
+// The hold while work runs: content drawn toward the point, deeper on each in-breath, with a
+// ripple leaving the point once a breath.
+fn hold_at(r: f32) -> f32 {
+    let hold = u.v[16].x;
+    if hold <= 0.0 { return 0.0; }
+    let q = r / u.v[16].z;
+    let phase = u.v[16].y;
+    let breath = 0.5 - 0.5 * cos(6.28318 * phase);
+    let pull = u.v[16].z * (0.07 + 0.07 * breath) * 2.3316 * q * exp(-q * q);
+    let ripple = 3.0 * sin(6.28318 * (1.6 * q - phase)) * exp(-0.35 * q * q) * smoothstep(0.0, 0.4, q);
+    return hold * (pull + ripple);
+}
+// One layer of content. Inside the front it is squeezed toward the point: the content out to
+// the scope's edge, `reach` away along this ray, is pulled into the bubble, most strongly at
+// its rim. Once the front has passed that edge the content springs past its place and back,
+// a damped wobble that dies with the wave. Outside the front the content is pushed aside, or
+// pulled in after it when push < 0.
+fn layer_at(r: f32, reach: f32, inside: bool) -> f32 {
+    let radius = u.v[13].y;
+    let width = u.v[13].z;
+    var shifted: f32;
+    if inside {
+        var q = 0.0;
+        if radius > 0.5 { q = clamp(r / radius, 0.0, 1.0); }
+        // How far the front has gone past this ray's end, as a share of what it has left to go.
+        let rest = u.v[17].w + 2.0 * width + u.v[14].y - reach;
+        let past = clamp((radius - reach) / max(rest, 1.0), 0.0, 1.0);
+        let spring = sin(7.854 * past) * exp(-3.0 * past) * min(u.v[17].x * 2.5, 1.0)
+            * 0.4 * width * r / max(reach, 1.0);
+        shifted = r + u.v[15].w * (max(reach - radius, 0.0) * q * q - spring);
+    } else {
+        let push = u.v[16].w;
+        let decay = 2.0 * width;
+        let d = abs(push) * decay * min(radius / decay, 1.0) * exp(-max(r - radius, 0.0) / decay);
+        shifted = select(r + d, r - d, push >= 0.0);
+    }
+    return shifted + wave_at(r) + hold_at(r);
+}
+// A layer sampled along the ray over `spread` pixels. The share of the spread that is
+// dispersion splits the colours: weights run from red through green to blue, or through the
+// palette as tint rises; the rest is an even smear. Weights sum to white, so where nothing
+// bends the colour comes back exactly.
+fn spectral(at: vec2<f32>, n: vec2<f32>, src: f32, spread: f32, share: f32, lod: f32, hue: f32, is_new: bool) -> vec4<f32> {
+    if abs(spread) < 0.35 { return page(at + n * src, is_new, lod); }
+    let tint = u.v[15].y;
+    var rgb = vec3(0.0);
+    var total = vec3(0.0);
+    var alpha = 0.0;
+    for (var i = 0; i < 5; i++) {
+        let t = f32(i) * 0.25;
+        let basis = clamp(vec3(1.0 - 2.0 * t, 1.0 - abs(2.0 * t - 1.0), 2.0 * t - 1.0), vec3(0.0), vec3(1.0));
+        let w = mix(vec3(1.0), mix(basis, max(palette(0.8 * t + hue), vec3(0.02)), tint), share);
+        let c = page(at + n * (src + (t - 0.5) * spread), is_new, lod);
+        rgb += c.rgb * w;
+        total += w;
+        alpha += c.a;
+    }
+    return vec4(rgb / total, alpha * 0.2);
+}
+// One layer seen through the warp at a pixel `r` from the point along `n`: its colour, where
+// it was sampled, how far its colours spread and its blur level.
+struct Layer { color: vec4<f32>, shown: vec2<f32>, spread: f32, lod: f32, }
+fn radial_layer(r: f32, n: vec2<f32>, reach: f32, edge: f32, wave: f32, hue: f32, inside: bool, is_new: bool) -> Layer {
+    let at = u.v[2].xy;
+    let blur = u.v[15].z;
+    let src = r + (layer_at(r, reach, inside) - r) * edge;
+    let next = r + 1.0 + (layer_at(r + 1.0, reach, inside) - r - 1.0) * edge;
+    // Stretch along and across the ray: above 1 the content is squeezed, below it magnified.
+    let along = next - src;
+    let across = select(1.0, src / r, r > 1.0);
+    let squeezed = max(max(along, across), 1.0);
+    let stretched = max(squeezed, 1.0 / max(min(along, across), 0.05));
+    let dispersion = u.v[15].x * abs(wave);
+    let smear = blur * min(stretched - 1.0, 6.0) * 1.5;
+    let lod = blur * log2(squeezed);
+    let spread = select(-1.0, 1.0, wave >= 0.0) * (dispersion + smear);
+    let color = spectral(at, n, src, spread, dispersion / (dispersion + smear + 0.001), lod, hue, is_new);
+    return Layer(color, at + n * src, spread, lod);
+}
+fn radial(px: vec2<f32>) -> vec4<f32> {
+    let res = u.v[0].xy;
+    let at = u.v[2].xy;
+    let mode = u.v[13].x;
+    let radius = u.v[13].y;
+    let width = u.v[13].z;
+    let d = px - at;
+    let r = length(d);
+    var n = vec2(0.0);
+    if r > 0.001 { n = d / r; }
+    // Where this ray leaves the scope, so how much content lies along it.
+    let safe = select(n, vec2(1e-4), abs(n) < vec2(1e-4));
+    let exits = max(-at / safe, (res - at) / safe);
+    let reach = max(min(exits.x, exits.y), r);
+    // Displacement dies out at the scope's edges, where its content meets what surrounds it,
+    // and never reaches past them to repeat the edge's pixels.
+    let edges = min(px, res - px);
+    let edge = smoothstep(0.0, max(u.v[7].z, 6.0), min(edges.x, edges.y));
+    // Emerge shows new content inside the front and Collapse outside it; Shock has no split.
+    let split = mode < 1.5 || mode > 2.5;
+    let inward = mode > 2.5;
+    let x = (r - radius) / width;
+    let zone = 0.3 + 1.0 / width;
+    var inside = 0.0;
+    if split { inside = 1.0 - smoothstep(-zone, zone, x); }
+    let wave = wave_at(r) * edge;
+    // The hue drifts across the ring and with time; a function of the ray, so it has no seam.
+    let hue = u.v[7].y + 0.15 * (n.x - n.y) + u.v[0].w * 0.04;
+    var within = Layer(vec4(0.0), px, 0.0, 0.0);
+    var beyond = Layer(vec4(0.0), px, 0.0, 0.0);
+    if inside > 0.001 { within = radial_layer(r, n, reach, edge, wave, hue, true, !inward); }
+    if inside < 0.999 { beyond = radial_layer(r, n, reach, edge, wave, hue, false, inward || !split); }
+    var col = within.color * inside + beyond.color * (1.0 - inside);
+    // The rim: the front's leading edge catches the light in the palette's colours, faintly on
+    // its own and brightly where it refracts bright content, most where it tilts to the light.
+    let energy = u.v[17].x;
+    let crest = exp(-x * x);
+    let slope = -2.0 * x * crest * min(u.v[13].w / width, 1.0) * edge;
+    let normal = normalize(vec3(-n * slope * 1.6, 1.0));
+    let halfway = normalize(normalize(vec3(-0.35, -0.55, 0.9)) + vec3(0.0, 0.0, 1.0));
+    let spec = pow(max(dot(normal, halfway), 0.0), 48.0);
+    let lead = select(x, -x, inward) - 0.55;
+    let rim = exp(-lead * lead * 25.0);
+    let luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+    let glow = u.v[15].y * energy * edge * rim * (0.12 + 0.9 * luma + 0.5 * spec);
+    col = vec4(col.rgb + palette(hue + 0.15 * x) * u.v[6].w * glow * col.a, col.a);
+    // The optional iridescent band, drawn as a ring on the front over the refracted content.
+    let overlay = clamp(u.v[17].y * exp(-x * x * 2.0) * edge, 0.0, 1.0);
+    if overlay > 0.0 {
+        let t = hue + 0.2 * x;
+        let c = (palette(t) * 0.5 + palette(t - 0.18) * 0.25 + palette(t + 0.18) * 0.25) * u.v[6].w;
+        col = vec4(c * overlay, overlay) + col * (1.0 - overlay);
+    }
+    // False-colour views (GlimmDebugView), as for the glimm.dev content above.
+    let debug = u.v[9].w;
+    var shown = beyond;
+    if inside > 0.5 { shown = within; }
+    if debug > 3.5 { return vec4(crest, abs(wave_at(r)) / max(u.v[13].w, 1.0), clamp(hold_at(r) / 16.0, 0.0, 1.0), 1.0); }
+    if debug > 2.5 { return vec4(vec3(clamp(max(exp2(shown.lod) - 1.0, abs(shown.spread)) / 32.0, 0.0, 1.0)), 1.0); }
+    if debug > 1.5 { return vec4(clamp(vec2(0.5) + (shown.shown - px) / 64.0, vec2(0.0), vec2(1.0)), 0.5, 1.0); }
+    if debug > 0.5 {
+        var mixed = 1.0;
+        if split { mixed = select(inside, 1.0 - inside, inward); }
+        return vec4(vec3(mixed), 1.0);
+    }
+    return vec4(min(col.rgb, vec3(col.a)), col.a);
+}
 @fragment fn glimm_fragment(in: Vertex) -> @location(0) vec4<f32> {
     let px = (in.position.xy - u.v[1].xy) / u.v[0].z;
+    if u.v[13].x > 0.5 {
+        let warped = radial(px);
+        if warped.a > 0.00001 { return vec4(warped.rgb / warped.a, warped.a); }
+        return vec4(0.0, 0.0, 0.0, warped.a);
+    }
     var page_color: vec4<f32>;
     if u.v[7].w > 0.5 { page_color = content(px); }
     else { page_color = page(px, true, 0.0); }

@@ -21,6 +21,9 @@ pub struct GlimmSample {
     pub active: bool,
     /// Whether the midpoint/burst callback may fire.
     pub midpoint: bool,
+    /// Radial effects: the breathing lens's phase, in cycles from 0 to 1, taken from the run's
+    /// own elapsed time so a seek reproduces it.
+    pub breath: f32,
 }
 
 /// Pure, seekable timeline. It allocates no renderer resources.
@@ -86,7 +89,13 @@ impl GlimmTimeline {
             return false;
         }
         let sample = self.sample(elapsed_ms);
-        let snap_ms = if elapsed_ms < 120. || !self.options.page_effect || self.fast.is_some() {
+        // A radial effect releases its hold straight into the front; only the glimm.dev scope
+        // snaps its gather shut first.
+        let snap_ms = if elapsed_ms < 120.
+            || !self.options.page_effect
+            || self.fast.is_some()
+            || self.options.effect.is_radial()
+        {
             0.
         } else {
             440. * (1. - sample.gather)
@@ -129,10 +138,14 @@ impl GlimmTimeline {
                 burst: from.burst,
                 active: k < 1.,
                 midpoint: false,
+                breath: self.breath(t),
             };
         }
         if self.options.effect == GlimmEffect::Band {
             return self.band_sample(t);
+        }
+        if self.options.effect.is_radial() {
+            return self.radial_sample(t);
         }
         let mut result = GlimmSample {
             active: true,
@@ -193,6 +206,60 @@ impl GlimmTimeline {
         result.strength = (if self.waiting_for_work { 0.55 } else { 1. }) * ease;
         result.progress = 0.08 * ease;
         result
+    }
+    /// Radial effects. While waiting, `gather` is the breathing lens, ramped in over
+    /// `gather_ms`. Once ready, `progress` is the front's eased travel, `strength` the wave's
+    /// energy, which rises within 90ms and is spent by the end, and the lens lets go in 260ms.
+    fn radial_sample(&self, t: f32) -> GlimmSample {
+        let breath = self.breath(t);
+        let Some((ready_at, from, _)) = self.ready else {
+            let hold = smooth(ratio(t, self.options.gather_ms));
+            return GlimmSample {
+                gather: hold,
+                haze: hold,
+                active: true,
+                breath,
+                ..GlimmSample::default()
+            };
+        };
+        let since = (t - ready_at).max(0.);
+        let mut k = ratio(since, self.options.sweep_ms);
+        if let Some((ff_at, ff_from)) = self.fast {
+            let ff_at = ff_at.max(ready_at);
+            if t >= ff_at {
+                k = ff_from + (1. - ff_from) * smooth(ratio(t - ff_at, 160.));
+            }
+        }
+        let active = k < 1.;
+        let decay = match self.options.effect {
+            GlimmEffect::Collapse => 0.8,
+            GlimmEffect::Shock => 0.9,
+            _ => 1.,
+        };
+        let strength = if active {
+            smooth(ratio(since, 90.)) * (1. - k).powf(decay)
+        } else {
+            0.
+        };
+        let hold = if active {
+            from.gather * (1. - smooth(ratio(since, 260.)))
+        } else {
+            0.
+        };
+        GlimmSample {
+            progress: self.options.easing.sample(k).clamp(0., 1.),
+            strength,
+            gather: hold,
+            haze: hold,
+            ring: strength,
+            burst: true,
+            active,
+            midpoint: since >= 90.,
+            breath,
+        }
+    }
+    fn breath(&self, t: f32) -> f32 {
+        (t / self.options.breath_ms).fract()
     }
     fn band_sample(&self, t: f32) -> GlimmSample {
         let Some((at, _, _)) = self.ready else {

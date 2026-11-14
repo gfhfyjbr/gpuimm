@@ -146,7 +146,12 @@ fn bezier([x1, y1, x2, y2]: [f32; 4], x: f32) -> f32 {
     value(t, y1, y2)
 }
 
-/// The two rendering paths used on glimm.dev: overlay only, or live content.
+/// What a run draws. `Band` and `Scope` are the two paths of glimm.dev; the others are radial
+/// distortions of the scope's content around the point of action (`at`, or `origin` with
+/// `origin_offset`), which may lie outside the scope.
+///
+/// Calling `anticipate` with a radial effect holds a breathing lens around the point until the
+/// work resolves, then releases into the effect; `cancel` lets the lens relax instead.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GlimmEffect {
     /// The regular premultiplied iridescent sweep.
@@ -154,6 +159,31 @@ pub enum GlimmEffect {
     /// Gather, progressive blur, content ripple and old/new dissolve.
     #[default]
     Scope,
+    /// New content comes out of the point as if pulled through a membrane: squeezed into a
+    /// growing bubble, refracted and dispersed at its rim, relaxing into place behind it, while
+    /// the old content ahead of the rim is pushed aside and ripples.
+    Emerge,
+    /// The content stays; a ring of refraction runs out from the point across it, weakening
+    /// with distance, with an optional second ring.
+    Shock,
+    /// The reverse of `Emerge`: the old content is drawn into the point and gone, and what
+    /// replaces it is pulled in after it.
+    Collapse,
+}
+impl GlimmEffect {
+    /// Whether this is one of the radial distortions rather than a glimm.dev sweep.
+    pub fn is_radial(self) -> bool {
+        matches!(self, Self::Emerge | Self::Shock | Self::Collapse)
+    }
+    /// The shader's mode number: 0 for the glimm.dev paths.
+    pub(super) fn mode(self) -> f32 {
+        match self {
+            Self::Band | Self::Scope => 0.,
+            Self::Emerge => 1.,
+            Self::Shock => 2.,
+            Self::Collapse => 3.,
+        }
+    }
 }
 
 /// Serializable settings. Names and defaults follow glimm 0.4.1's GlimmScope.
@@ -213,6 +243,48 @@ pub struct GlimmOptions {
     pub page_effect: bool,
     /// Stable palette phase, in 0..0.4; explicit for reproducible captures.
     pub hue_shift: f32,
+    /// Radial effects: how far the wavefront's refraction moves the content, in logical pixels,
+    /// before `intensity`; 0..96.
+    pub amplitude: f32,
+    /// Radial effects: width of the wavefront ring, in logical pixels; 4..600.
+    pub ring_width: f32,
+    /// Radial effects: distance between the ripples trailing the front, in logical pixels;
+    /// 8..600.
+    pub wavelength: f32,
+    /// Radial effects: how long the train of trailing ripples is, in wavelengths; 0 leaves the
+    /// front alone. 0..6.
+    pub ripples: f32,
+    /// Shock: strength of a second ring that follows the first at six tenths of its radius,
+    /// relative to the first; 0..1.
+    pub echo: f32,
+    /// Radial effects: distance from the point at which the wave has lost half its strength,
+    /// in logical pixels; 16..100000.
+    pub falloff: f32,
+    /// Radial effects: how far the colours of the refracted light separate, relative to the
+    /// refraction itself; 0 keeps them together. 0..2.
+    pub chroma: f32,
+    /// Radial effects: how much the palette colours the refracted light, in its dispersion and
+    /// in a rim along the front; 0 is uncoloured refraction. 0..1.
+    pub tint: f32,
+    /// Radial effects: blur per unit of stretch, so squeezed and stretched content softens with
+    /// the warp; 0..2.
+    pub stretch_blur: f32,
+    /// Emerge and Collapse: share of the content's distance to the scope's edge that is pulled
+    /// into the bubble, so the content inside is squeezed toward the point; 0..1.
+    pub squeeze: f32,
+    /// Emerge and Collapse: how much of the bubble's area pushes the content outside it aside
+    /// (Emerge) or pulls it in after it (Collapse); 0..0.9.
+    pub push: f32,
+    /// Radial effects while `anticipate` waits: strength of the breathing lens; 0..2.
+    pub hold_amount: f32,
+    /// Radial effects while `anticipate` waits: radius of the breathing lens, in logical pixels;
+    /// 8..2000.
+    pub hold_radius: f32,
+    /// Radial effects while `anticipate` waits: one breath, in milliseconds; 200..10000.
+    pub breath_ms: f32,
+    /// Radial effects: opacity of the iridescent band drawn as a ring on the front, an optional
+    /// layer over the refraction; 0 draws none. 0..1.5.
+    pub band_overlay: f32,
 }
 impl Default for GlimmOptions {
     fn default() -> Self {
@@ -243,6 +315,21 @@ impl Default for GlimmOptions {
             full_bleed: None,
             page_effect: true,
             hue_shift: 0.,
+            amplitude: 18.,
+            ring_width: 44.,
+            wavelength: 60.,
+            ripples: 2.5,
+            echo: 0.,
+            falloff: 900.,
+            chroma: 0.6,
+            tint: 0.45,
+            stretch_blur: 1.,
+            squeeze: 0.7,
+            push: 0.4,
+            hold_amount: 1.,
+            hold_radius: 90.,
+            breath_ms: 1400.,
+            band_overlay: 0.,
         }
     }
 }
@@ -260,6 +347,50 @@ impl GlimmOptions {
             origin: [0.5, 0.5],
             origin_offset: [0., 0.],
             feather: Some(0.),
+            ..Self::default()
+        }
+    }
+    /// New content pulled out of the point of action through a membrane, the old content
+    /// around it pushed aside. Set `at` to the point, in scope pixels; it may lie outside the
+    /// scope, for example on the edge of the element the content comes from.
+    pub fn emerge() -> Self {
+        Self {
+            effect: GlimmEffect::Emerge,
+            easing: GlimmEasing::CubicBezier([0.33, 0.15, 0.55, 1.]),
+            sweep_ms: 1150.,
+            origin: [0.5, 0.5],
+            origin_offset: [0., 0.],
+            ..Self::default()
+        }
+    }
+    /// A ring of refraction crossing unchanged content, with a weaker second ring: something
+    /// landed at the point, or finished there.
+    pub fn shock() -> Self {
+        Self {
+            effect: GlimmEffect::Shock,
+            easing: GlimmEasing::CubicBezier([0.3, 0.3, 0.6, 1.]),
+            sweep_ms: 1200.,
+            origin: [0.5, 0.5],
+            origin_offset: [0., 0.],
+            amplitude: 14.,
+            ring_width: 36.,
+            wavelength: 48.,
+            ripples: 1.2,
+            echo: 0.45,
+            falloff: 1000.,
+            ..Self::default()
+        }
+    }
+    /// The old content drawn into the point of action and gone.
+    pub fn collapse() -> Self {
+        Self {
+            effect: GlimmEffect::Collapse,
+            easing: GlimmEasing::CubicBezier([0.4, 0.15, 0.6, 1.]),
+            sweep_ms: 950.,
+            origin: [0.5, 0.5],
+            origin_offset: [0., 0.],
+            squeeze: 0.85,
+            push: 0.3,
             ..Self::default()
         }
     }
@@ -288,6 +419,21 @@ impl GlimmOptions {
             .at
             .map(|p| p.map(|v| finite(v, 0., -100_000., 100_000.)));
         self.feather = self.feather.map(|v| finite(v, 0., 0., 1000.));
+        self.amplitude = finite(self.amplitude, 18., 0., 96.);
+        self.ring_width = finite(self.ring_width, 44., 4., 600.);
+        self.wavelength = finite(self.wavelength, 60., 8., 600.);
+        self.ripples = finite(self.ripples, 2.5, 0., 6.);
+        self.echo = finite(self.echo, 0., 0., 1.);
+        self.falloff = finite(self.falloff, 900., 16., 100_000.);
+        self.chroma = finite(self.chroma, 0.6, 0., 2.);
+        self.tint = finite(self.tint, 0.45, 0., 1.);
+        self.stretch_blur = finite(self.stretch_blur, 1., 0., 2.);
+        self.squeeze = finite(self.squeeze, 0.7, 0., 1.);
+        self.push = finite(self.push, 0.4, 0., 0.9);
+        self.hold_amount = finite(self.hold_amount, 1., 0., 2.);
+        self.hold_radius = finite(self.hold_radius, 90., 8., 2000.);
+        self.breath_ms = finite(self.breath_ms, 1400., 200., 10_000.);
+        self.band_overlay = finite(self.band_overlay, 0., 0., 1.5);
         self.fade = self.fade.and_then(|[a, b]| {
             let a = finite(a, 0., 0., 1.);
             let b = finite(b, 1., 0., 1.);

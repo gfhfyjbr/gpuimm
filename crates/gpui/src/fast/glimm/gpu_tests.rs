@@ -1,6 +1,7 @@
 //! The same scoped-composition and original-WebGL oracle tests run on each renderer.
 use gpui::{
-    Bounds, ContentMask, GlimmFrame, GlimmUniforms, Quad, ScaledPixels, Scene, point, rgb, size,
+    Bounds, ContentMask, GlimmFrame, GlimmOptions, GlimmTimeline, GlimmUniforms, Quad,
+    ScaledPixels, Scene, point, rgb, size,
 };
 use std::rc::Rc;
 
@@ -379,4 +380,245 @@ fn glimm_gpu_follows_an_edited_shader_and_keeps_the_last_good_one() {
     write(shader(), 4_000);
     assert!(near(&render(&mut renderer, &scene), &built_in));
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+// Radial distortions, driven through the real settings, timeline and uniforms.
+
+fn radial_frame(live_len: usize, old: Scene, options: &GlimmOptions, at_ms: f32) -> GlimmFrame {
+    let timeline = GlimmTimeline::new(options.clone(), false);
+    GlimmFrame {
+        run_id: 1,
+        bounds: bounds(0., 0., 512., 320.),
+        clip: bounds(0., 0., 512., 320.),
+        paint_range: 0..live_len,
+        old_scene: Rc::new(old),
+        uniforms: GlimmUniforms::for_scope(options, timeline.sample(at_ms), [512., 320.], 1.),
+    }
+}
+fn radial_render(live: Scene, old: Scene, options: &GlimmOptions, at_ms: f32) -> image::RgbaImage {
+    let mut scene = live;
+    let frame = radial_frame(scene.len(), old, options, at_ms);
+    scene.fast_glimm.frames.push(frame);
+    render(&mut renderer(), &scene)
+}
+fn end_of(options: &GlimmOptions) -> f32 {
+    GlimmTimeline::new(options.clone(), false).end_ms().unwrap()
+}
+/// The largest channel difference over the pixels `keep` selects.
+fn largest_difference(
+    a: &image::RgbaImage,
+    b: &image::RgbaImage,
+    keep: impl Fn(u32, u32) -> bool,
+) -> u8 {
+    a.enumerate_pixels()
+        .filter(|(x, y, _)| keep(*x, *y))
+        .map(|(x, y, p)| {
+            (0..4)
+                .map(|i| p[i].abs_diff(b.get_pixel(x, y)[i]))
+                .max()
+                .unwrap()
+        })
+        .max()
+        .unwrap_or(0)
+}
+/// A white page with a black vertical line, 4px wide, centred on `x`.
+fn line(x: f32) -> Scene {
+    let mut scene = Scene::default();
+    quad(&mut scene, bounds(0., 0., 512., 320.), 0xffffff);
+    quad(&mut scene, bounds(x - 2., 0., 4., 320.), 0x000000);
+    scene.finish();
+    scene
+}
+/// Where the line crosses row `y`: the centre of its dark pixels between `from` and `to`.
+fn line_centre(image: &image::RgbaImage, y: u32, from: u32, to: u32) -> f32 {
+    let (sum, weight) = (from..to).fold((0., 0.), |(sum, weight), x| {
+        let darkness = 255. - f32::from(image.get_pixel(x, y)[1]);
+        (sum + darkness * x as f32, weight + darkness)
+    });
+    assert!(weight > 100., "no line on row {y}");
+    sum / weight + 0.5
+}
+/// The first instant at which the front has travelled `radius` logical pixels.
+fn when_front_reaches(options: &GlimmOptions, radius: f32) -> f32 {
+    let timeline = GlimmTimeline::new(options.clone(), false);
+    (0..2000)
+        .map(|ms| ms as f32)
+        .find(|ms| {
+            GlimmUniforms::for_scope(options, timeline.sample(*ms), [512., 320.], 1.).0[13][1]
+                >= radius
+        })
+        .expect("the front reaches that radius")
+}
+
+#[test]
+fn glimm_gpu_emerge_starts_on_the_old_content_and_ends_exactly_on_the_new() {
+    // The point of action lies outside the scope, as on a parent's edge.
+    let options = GlimmOptions {
+        at: Some([-40., 160.]),
+        ..GlimmOptions::emerge()
+    };
+    let mut plain = renderer();
+    let old = render(&mut plain, &pattern(true));
+    let new = render(&mut plain, &pattern(false));
+    let start = radial_render(pattern(false), pattern(true), &options, 0.);
+    assert!(
+        largest_difference(&start, &old, |_, _| true) <= 1,
+        "Emerge does not start on the old content"
+    );
+    let end = end_of(&options);
+    let last = radial_render(pattern(false), pattern(true), &options, end - 1.);
+    assert!(
+        largest_difference(&last, &new, |_, _| true) <= 3,
+        "the last frame is not the new content"
+    );
+    let done = radial_render(pattern(false), pattern(true), &options, end);
+    assert!(
+        largest_difference(&done, &new, |_, _| true) <= 1,
+        "displacement or tint left at the end"
+    );
+}
+#[test]
+fn glimm_gpu_emerge_brings_new_content_out_of_a_point_outside_the_scope() {
+    let options = GlimmOptions {
+        at: Some([-40., 160.]),
+        ..GlimmOptions::emerge()
+    };
+    // Mid-way the front has crossed the near side of the scope but not the far side.
+    let at_ms = when_front_reaches(&options, 260.);
+    let image = radial_render(solid(0x00ff00), solid(0x0000ff), &options, at_ms);
+    let near = image.get_pixel(30, 160);
+    let far = image.get_pixel(500, 160);
+    assert!(
+        near[1] > 200 && near[2] < 60,
+        "no new content near the point: {near:?}"
+    );
+    assert!(
+        far[2] > 200 && far[1] < 60,
+        "new content far from the front: {far:?}"
+    );
+}
+#[test]
+fn glimm_gpu_emerge_pushes_the_old_content_outward_and_bends_its_lines() {
+    let options = GlimmOptions {
+        at: Some([100., 160.]),
+        ..GlimmOptions::emerge()
+    };
+    let at_ms = when_front_reaches(&options, 120.);
+    let image = radial_render(solid(0x00ff00), line(300.), &options, at_ms);
+    // On the row through the point the push is horizontal and away from the point.
+    let level = line_centre(&image, 160, 230, 440) - 300.;
+    // Farther from the point it is weaker, so the straight line comes out curved.
+    let high = line_centre(&image, 40, 230, 440) - 300.;
+    eprintln!(
+        "{}: Emerge pushed the line {level}px on the point's row, {high}px 120px above",
+        backend_name()
+    );
+    assert!(
+        level > 4.,
+        "the old content did not move outward: {level}px"
+    );
+    assert!(
+        level - high > 2.,
+        "the line did not bend: {level}px level, {high}px high"
+    );
+}
+#[test]
+fn glimm_gpu_shock_bends_the_live_content_and_leaves_it_unchanged_at_its_end() {
+    let options = GlimmOptions {
+        at: Some([256., 160.]),
+        ..GlimmOptions::shock()
+    };
+    let new = render(&mut renderer(), &pattern(false));
+    let at_ms = when_front_reaches(&options, 120.);
+    let mid = radial_render(pattern(false), pattern(true), &options, at_ms);
+    let bent = new
+        .pixels()
+        .zip(mid.pixels())
+        .filter(|(a, b)| a[0].abs_diff(b[0]) > 20)
+        .count();
+    eprintln!("{}: Shock moved {bent} pixels", backend_name());
+    assert!(bent > 3000, "the ring bent only {bent} pixels");
+    // Shock draws what the scope holds now, never the snapshot taken before.
+    let ahead = |x: u32, y: u32| (x as f32 - 256.).hypot(y as f32 - 160.) > 240.;
+    assert!(
+        largest_difference(&mid, &new, ahead) <= 1,
+        "content ahead of the ring changed"
+    );
+    let done = radial_render(pattern(false), pattern(true), &options, end_of(&options));
+    assert!(
+        largest_difference(&done, &new, |_, _| true) <= 1,
+        "Shock left the content changed"
+    );
+}
+#[test]
+fn glimm_gpu_collapse_draws_the_old_content_into_the_point_and_gone() {
+    let options = GlimmOptions {
+        at: Some([256., 160.]),
+        ..GlimmOptions::collapse()
+    };
+    fn card() -> Scene {
+        let mut card = solid(0xffffff);
+        quad(&mut card, bounds(156., 100., 200., 120.), 0xff0000);
+        card.finish();
+        card
+    }
+    let red = |image: &image::RgbaImage| {
+        image
+            .pixels()
+            .filter(|p| p[0] > 200 && p[1] < 90 && p[2] < 90)
+            .count()
+    };
+    let at = |ms: f32| radial_render(solid(0xffffff), card(), &options, ms);
+    let whole = red(&render(&mut renderer(), &card()));
+    let end = end_of(&options);
+    let start = red(&at(0.));
+    let middle = red(&at(end * 0.6));
+    let done = red(&at(end));
+    eprintln!(
+        "{}: Collapse left {start}, {middle}, {done} of {whole} card pixels",
+        backend_name()
+    );
+    assert!(
+        start + 200 > whole,
+        "the card is not whole at the start: {start} of {whole}"
+    );
+    assert!(
+        middle > 0 && middle * 2 < whole,
+        "the card was not drawn in: {middle} of {whole}"
+    );
+    assert_eq!(done, 0, "old content left at the end");
+}
+#[test]
+fn glimm_gpu_hold_breathes_around_the_point_and_leaves_the_rest() {
+    let options = GlimmOptions {
+        at: Some([256., 160.]),
+        hold_radius: 40.,
+        ..GlimmOptions::shock()
+    };
+    let timeline = GlimmTimeline::new(options.clone(), true);
+    let breath = options.breath_ms;
+    let frame_at = |ms: f32| {
+        let mut scene = pattern(false);
+        let mut frame = radial_frame(scene.len(), pattern(false), &options, 0.);
+        frame.uniforms = GlimmUniforms::for_scope(&options, timeline.sample(ms), [512., 320.], 1.);
+        scene.fast_glimm.frames.push(frame);
+        render(&mut renderer(), &scene)
+    };
+    let plain = render(&mut renderer(), &pattern(false));
+    let exhaled = frame_at(4. * breath);
+    let inhaled = frame_at(4.5 * breath);
+    let far = |x: u32, y: u32| (x as f32 - 256.).hypot(y as f32 - 160.) > 5. * options.hold_radius;
+    let near = |x: u32, y: u32| (x as f32 - 256.).hypot(y as f32 - 160.) < options.hold_radius;
+    assert!(
+        largest_difference(&inhaled, &plain, far) <= 2,
+        "the hold reached far from the point"
+    );
+    assert!(
+        largest_difference(&inhaled, &plain, near) > 100,
+        "nothing held at the point"
+    );
+    assert!(
+        largest_difference(&inhaled, &exhaled, near) > 100,
+        "the hold does not breathe"
+    );
 }
