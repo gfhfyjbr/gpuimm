@@ -22,7 +22,8 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         SWIFT_OBJC_BRIDGING_HEADER: ../include/gpuimm.h
         LIBRARY_SEARCH_PATHS: "$(inherited) $(GPUIMM_LIBRARY_DIR)"
-        OTHER_LDFLAGS: "$(inherited) -lgpui_mobile_demo -framework Metal -framework QuartzCore -framework CoreGraphics -framework CoreText -framework Security -liconv"
+        # Cargo emits both .a and .dylib; -l would select a library left on the build host.
+        OTHER_LDFLAGS: '$(inherited) "$(GPUIMM_LIBRARY_DIR)/libgpui_mobile_demo.a" -framework Metal -framework QuartzCore -framework CoreGraphics -framework CoreText -framework Security -liconv'
   GpuimmMobileTests:
     type: bundle.ui-testing
     platform: iOS

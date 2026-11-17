@@ -75,6 +75,9 @@ On Intel Macs, set `GPUIMM_RUST_TARGET=x86_64-apple-ios`. For a device build use
 `GPUIMM_RUST_TARGET=aarch64-apple-ios`; the script builds without signing, so
 configure your own team/signing before installing on a physical device.
 The deployment target is iOS 16. Build with an iOS 26+ SDK for the glass APIs.
+The Xcode project explicitly links `libgpui_mobile_demo.a`: Cargo also emits a
+`.dylib`, and `-lgpui_mobile_demo` would select that host-path dynamic library,
+which can appear to work in Simulator but fails to load on a physical phone.
 
 For an existing app, build your Rust application crate as a `staticlib`, link it
 and the frameworks listed in `ios/project.yml`, import `include/gpuimm.h` via a
@@ -192,6 +195,9 @@ This emulator's Vulkan implementation fails while translating the GPUI gradient
 shader to Metal; its bundled SwiftShader also rejects a SPIR-V source-language
 operand. The explicit GLES override is therefore required on that environment.
 Android debug object labels are suppressed to avoid a separate ranchu Vulkan
-driver crash, while WGPU validation remains enabled. Vulkan physical-device
-runtime behavior, physical iPhone behavior, performance and power consumption
-have not been validated by these simulator tests.
+driver crash, while WGPU validation remains enabled. The statically linked iOS
+app was subsequently signed, installed and launched on an iPhone 15 running
+iOS 26.6; the GPU scene, native glass and counter updates were observed on the
+physical screen. Its Mach-O dependencies were checked for build-host paths.
+Android Vulkan on physical devices, sustained performance and power consumption
+have not been validated.
