@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.gpuimm">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <uses-feature android:name="android.hardware.vulkan.level" android:required="false" android:version="0" />
+    <application android:label="gpuimm" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:hardwareAccelerated="true" android:debuggable="true" android:extractNativeLibs="true">
+        <activity android:name=".DemoActivity" android:exported="true" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density" android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+    <instrumentation android:name=".MobileSmokeTest" android:targetPackage="dev.gpuimm" android:label="Mobile embedding smoke test" />
+</manifest>

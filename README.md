@@ -73,6 +73,10 @@ Tart runtime verification, original GLSL comparison, license and limitations.
 
 ## Using it
 
+For embedding GPUI/Glimm content inside native iOS or Android apps, see
+[Native mobile embedding](docs/mobile.md). The local mobile examples combine
+GPU content with UIKit Liquid Glass or Android Views.
+
 Alias the published crates to GPUI's library names:
 
 ```toml

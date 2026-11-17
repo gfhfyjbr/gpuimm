@@ -3719,6 +3719,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_mobile"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gpui",
+ "gpui_wgpu",
+ "raw-window-handle",
+ "uuid",
+ "wgpu 30.0.0",
+]
+
+[[package]]
+name = "gpui_mobile_demo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui_mobile",
+ "jni 0.21.1",
+ "log",
+]
+
+[[package]]
 name = "gpui_perf"
 version = "0.1.0"
 dependencies = [
