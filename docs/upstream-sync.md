@@ -83,6 +83,10 @@ only hold the hooks that call into it.
    `compat/` (the `gpui-pre-*` stand-ins GPUI Kit applications patch in).
    Documentation goes in `docs/`.
 
+   `gpui_mobile` and `gpui_mobile_demo` are also our own crates. They implement
+   the existing `Platform` traits and `run_embedded` contract for host-owned
+   native views; their API does not add methods or types to upstream GPUI.
+
 Which directories are upstream's is recorded in [`UPSTREAM`](../UPSTREAM) at
 the repository root: every directory in `crates/` except `gpui_perf`, and
 `tooling/perf`.
